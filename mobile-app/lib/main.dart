@@ -802,9 +802,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             case 'extension':
               logPrefix = '🔌 [Extension]';
               break;
-            case 'pc-server':
-              logPrefix = '🖥️ [PC Server]';
-              break;
             default:
               logPrefix = '📝 [Log]';
           }
@@ -1587,9 +1584,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         switch (logSource) {
           case 'extension':
             logPrefix = '🔌 [Extension]';
-            break;
-          case 'pc-server':
-            logPrefix = '🖥️ [PC Server]';
             break;
           default:
             logPrefix = '📝 [Log]';

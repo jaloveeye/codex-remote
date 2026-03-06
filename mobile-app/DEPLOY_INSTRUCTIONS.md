@@ -1,62 +1,115 @@
-# Vercel 배포 안내
+# Mobile App Deployment Instructions
 
-## 왜 로컬에서 빌드해야 하나요?
+## English
 
-**Vercel 빌드 환경에는 Flutter가 없습니다.**  
-그래서 `flutter build web`은 Vercel 서버에서 실행할 수 없고, 반드시 로컬(또는 GitHub Actions)에서 빌드한 뒤 **빌드 결과물만** Vercel에 올려야 합니다.
+## Why build locally?
 
-## 배포 방법 (권장)
+The Vercel build environment does not include Flutter for this project.
+Build the Flutter web app locally or in GitHub Actions, then upload only the generated output.
 
-### 1. 로컬에서 빌드 후 Vercel CLI로 배포
+## Recommended deployment flow
+
+### 1. Build locally and deploy with Vercel CLI
 
 ```bash
-# 1. Flutter web 빌드
 cd mobile-app
 flutter pub get
-flutter build web --release --base-href /   --dart-define=RELAY_SERVER_URL=https://relay.example.com
-
-# 2. 빌드 결과물 폴더에 Vercel 설정 복사
+flutter build web --release --base-href / --dart-define=RELAY_SERVER_URL=https://relay.example.com
 cp vercel-build-output.json build/web/vercel.json
-
-# 3. 빌드된 디렉토리에서 배포
 cd build/web
 vercel --prod
 ```
 
-`RELAY_SERVER_URL` 값은 반드시 **새로 분리한 릴레이 서버 주소**로 바꾸세요.
+Replace `RELAY_SERVER_URL` with the dedicated relay server URL for this project.
 
-처음 한 번만 `vercel link`로 프로젝트 연결이 필요할 수 있습니다. 이미 `mobile-app/.vercel/`에 연결돼 있으면 `build/web`에서 해도 같은 프로젝트로 배포됩니다.  
-연결이 안 되어 있으면:
+If the project is not linked yet:
 
 ```bash
 cd mobile-app/build/web
-vercel link   # 프로젝트 선택: codex-remote-web
+vercel link
 vercel --prod
 ```
 
-### 2. Vercel 대시보드 설정 (Git 푸시 자동 배포를 쓰지 않을 때)
+### 2. Vercel dashboard settings
 
-- **Build Command**: 비워 두기 (또는 삭제)
-- **Install Command**: 비워 두기
-- **Output Directory**: 비워 두기
+When you are not using Git-triggered auto deployment:
 
-Git 푸시로 자동 배포하려면 Flutter가 없으므로 **자동 빌드는 사용하지 않고**, 위 1번처럼 로컬 빌드 후 `vercel --prod`로만 배포하는 방식을 권장합니다.
+- **Build Command**: leave empty
+- **Install Command**: leave empty
+- **Output Directory**: leave empty
 
-### 3. GitHub Actions로 자동 배포 (선택)
+### 3. GitHub Actions deployment (optional)
 
-저장소에 GitHub Actions 워크플로를 두고, 푸시 시 Flutter 빌드 후 Vercel에 배포할 수 있습니다.  
-이 경우 워크플로에서 Flutter 설치 → `flutter build web --dart-define=RELAY_SERVER_URL=...` → `vercel --prebuilt --prod` 순서로 실행하고, Vercel 토큰은 GitHub Secrets에 넣어 사용합니다.
+You can automate deployment by installing Flutter in GitHub Actions, building web output, and then running `vercel --prebuilt --prod`.
+Store the Vercel token in GitHub Secrets.
 
-## Vercel 설정 파일 (한 곳만 사용)
+## Vercel config files
 
-**배포에 쓰는 Vercel 설정은 `vercel-build-output.json` 한 곳뿐입니다.**  
-이 파일을 `build/web/vercel.json`으로 복사한 뒤 `build/web`에서 배포합니다.  
-`web/` 폴더에는 `vercel.json`을 두지 않습니다.
+Use only `vercel-build-output.json` as the deployment config source.
+Copy it to `build/web/vercel.json` before deploying.
+
+## Project structure
+
+- `mobile-app/` — Flutter project root
+- `mobile-app/web/` — Flutter web source
+- `mobile-app/build/web/` — built output deployed to Vercel
+- `mobile-app/vercel.json` — reference config
+- `mobile-app/vercel-build-output.json` — deployment config copied into the build output
+
+---
+
+## 한국어
+
+## 왜 로컬에서 빌드하나요?
+
+이 프로젝트에서는 Vercel 빌드 환경에 Flutter가 포함되어 있지 않습니다.
+Flutter web 앱은 로컬 또는 GitHub Actions에서 빌드한 뒤, 생성된 결과물만 업로드해야 합니다.
+
+## 권장 배포 절차
+
+### 1. 로컬 빌드 후 Vercel CLI로 배포
+
+```bash
+cd mobile-app
+flutter pub get
+flutter build web --release --base-href / --dart-define=RELAY_SERVER_URL=https://relay.example.com
+cp vercel-build-output.json build/web/vercel.json
+cd build/web
+vercel --prod
+```
+
+`RELAY_SERVER_URL`은 이 프로젝트 전용 릴레이 서버 주소로 바꾸세요.
+
+프로젝트 연결이 아직 없다면:
+
+```bash
+cd mobile-app/build/web
+vercel link
+vercel --prod
+```
+
+### 2. Vercel 대시보드 설정
+
+Git 푸시 기반 자동 배포를 사용하지 않을 때는:
+
+- **Build Command**: 비워 둡니다
+- **Install Command**: 비워 둡니다
+- **Output Directory**: 비워 둡니다
+
+### 3. GitHub Actions 배포 (선택)
+
+GitHub Actions에서 Flutter를 설치하고 web 빌드 후 `vercel --prebuilt --prod`를 실행하면 자동 배포할 수 있습니다.
+Vercel 토큰은 GitHub Secrets에 저장하세요.
+
+## Vercel 설정 파일
+
+배포 설정 원본으로는 `vercel-build-output.json`만 사용하세요.
+배포 전에 이 파일을 `build/web/vercel.json`으로 복사합니다.
 
 ## 프로젝트 구조
 
-- `mobile-app/` - Flutter 프로젝트 루트
-- `mobile-app/web/` - Flutter web 소스 (index.html 등)
-- `mobile-app/build/web/` - 빌드 결과물 (**이 폴더 내용을 Vercel에 배포**)
-- `mobile-app/vercel.json` - 라우팅/헤더 참고용
-- `mobile-app/vercel-build-output.json` - **배포 시 이 파일만** `build/web/vercel.json`으로 복사해 사용
+- `mobile-app/` — Flutter 프로젝트 루트
+- `mobile-app/web/` — Flutter web 소스
+- `mobile-app/build/web/` — Vercel에 배포할 빌드 결과물
+- `mobile-app/vercel.json` — 참고용 설정 파일
+- `mobile-app/vercel-build-output.json` — 빌드 결과물로 복사하는 배포 설정 파일

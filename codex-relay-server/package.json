@@ -28,10 +28,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/codex-remote.git"
+    "url": "https://github.com/jaloveeye/codex-remote.git"
   },
-  "homepage": "https://github.com/your-org/codex-remote",
+  "homepage": "https://www.jaloveeye.com/",
   "bugs": {
-    "url": "https://github.com/your-org/codex-remote/issues"
+    "url": "https://github.com/jaloveeye/codex-remote/issues"
   }
 }
