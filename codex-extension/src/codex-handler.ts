@@ -5,6 +5,51 @@ import { WebSocketServer } from "./websocket-server";
 import { CONFIG } from "./config";
 
 type CodexAgentMode = "agent" | "ask" | "plan" | "debug" | "auto";
+type CodexReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "auto";
+
+interface CodexModelCapability {
+  id: string;
+  model: string;
+  displayName: string;
+  description: string;
+  isDefault: boolean;
+  hidden: boolean;
+  defaultReasoningEffort: string;
+  supportedReasoningEfforts: string[];
+  supportsPersonality: boolean;
+  inputModalities: string[];
+}
+
+interface CodexRuntimeCapabilities {
+  provider: "codex";
+  ready: boolean;
+  cliStatus: CodexCliStatus;
+  agentModes: CodexAgentMode[];
+  models: CodexModelCapability[];
+  ideContext: {
+    supported: boolean;
+    defaultEnabled: boolean;
+    reason: string;
+  };
+  flatMode: {
+    supported: boolean;
+    defaultEnabled: boolean;
+    reason: string;
+  };
+  defaults: {
+    model: string;
+    reasoningEffort: string;
+    agentMode: CodexAgentMode;
+  };
+  error?: string;
+}
 
 interface JsonRpcErrorShape {
   code?: number;
@@ -1180,32 +1225,192 @@ export class CodexHandler {
     return threadId;
   }
 
+  private normalizeReasoningEffort(effort: string | undefined): string {
+    const normalized = (effort || "").trim().toLowerCase();
+    const allowed = new Set([
+      "none",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    return allowed.has(normalized) ? normalized : "medium";
+  }
+
+  private parseModelCapabilities(payload: unknown): CodexModelCapability[] {
+    const resultObject = this.asObject(payload) || {};
+    const rawItems = Array.isArray(resultObject.data)
+      ? resultObject.data
+      : Array.isArray((resultObject as any).models)
+      ? ((resultObject as any).models as unknown[])
+      : Array.isArray(payload)
+      ? (payload as unknown[])
+      : [];
+
+    return rawItems
+      .map((item) => this.asObject(item) || {})
+      .map((item) => {
+        const rawReasoning = Array.isArray(item.supportedReasoningEfforts)
+          ? item.supportedReasoningEfforts
+          : [];
+        const supportedReasoningEfforts = rawReasoning
+          .map((entry) => {
+            if (typeof entry === "string") {
+              return entry.trim();
+            }
+            const obj = this.asObject(entry) || {};
+            return this.safeString(
+              obj.reasoningEffort ?? obj.reasoning_effort
+            ).trim();
+          })
+          .filter((entry) => entry.length > 0);
+
+        return {
+          id: this.safeString(item.id || item.model).trim(),
+          model: this.safeString(item.model || item.id).trim(),
+          displayName: this.safeString(
+            item.displayName || item.display_name || item.model || item.id
+          ).trim(),
+          description: this.safeString(item.description).trim(),
+          isDefault: item.isDefault === true,
+          hidden: item.hidden === true,
+          defaultReasoningEffort: this.safeString(
+            item.defaultReasoningEffort || item.default_reasoning_effort
+          ).trim(),
+          supportedReasoningEfforts,
+          supportsPersonality: item.supportsPersonality === true,
+          inputModalities: Array.isArray(item.inputModalities)
+            ? item.inputModalities
+                .map((value) => this.safeString(value).trim())
+                .filter((value) => value.length > 0)
+            : [],
+        };
+      })
+      .filter((item) => item.model.length > 0);
+  }
+
+  async getRuntimeCapabilities(): Promise<CodexRuntimeCapabilities> {
+    const base: CodexRuntimeCapabilities = {
+      provider: "codex",
+      ready: false,
+      cliStatus: this.getCodexCliStatus(),
+      agentModes: ["auto", "agent", "ask", "plan", "debug"],
+      models: [],
+      ideContext: {
+        supported: false,
+        defaultEnabled: false,
+        reason: "Remote prompt pipeline does not inject IDE context yet.",
+      },
+      flatMode: {
+        supported: false,
+        defaultEnabled: false,
+        reason: "Flat mode is not exposed through the current app-server flow.",
+      },
+      defaults: {
+        model: "auto",
+        reasoningEffort: "auto",
+        agentMode: "auto",
+      },
+    };
+
+    try {
+      await this.ensureServerReady();
+      const modelResult = await this.sendRpcRequest(
+        "model/list",
+        { includeHidden: false, limit: 100 },
+        15000
+      );
+      const models = this.parseModelCapabilities(modelResult);
+      const defaultModel =
+        models.find((item) => item.isDefault) || models[0] || null;
+
+      this.log(
+        `[CODEX] runtime capabilities loaded - models: ${models.length}, default: ${
+          defaultModel?.model || "none"
+        }`
+      );
+      if (models.length > 0) {
+        this.log(
+          `[CODEX] runtime capability models: ${models
+            .map(
+              (item) =>
+                `${item.model}[${item.supportedReasoningEfforts.join("/") || "n/a"}]`
+            )
+            .join(", ")}`
+        );
+      }
+
+      return {
+        ...base,
+        ready: true,
+        cliStatus: this.getCodexCliStatus(),
+        models,
+        defaults: {
+          model: defaultModel?.model || "auto",
+          reasoningEffort:
+            defaultModel?.defaultReasoningEffort?.trim().length
+              ? defaultModel.defaultReasoningEffort.trim()
+              : "auto",
+          agentMode: "auto",
+        },
+      };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown capability error";
+      this.logError("Failed to load runtime capabilities", error);
+      return {
+        ...base,
+        cliStatus: this.getCodexCliStatus(),
+        error: errorMessage,
+      };
+    }
+  }
+
   private async startTurn(
     threadId: string,
     text: string,
-    selectedMode: string
+    selectedMode: string,
+    selectedModel: string | undefined,
+    selectedEffort: string
   ): Promise<{ turnId: string | null; immediateText: string }> {
-    const candidateParams: Record<string, unknown>[] = [
-      {
-        threadId,
-        input: [{ type: "text", text }],
-        summary: "auto",
-      },
-      {
-        threadId,
-        input: [{ type: "text", text }],
-        personality: "default",
-      },
-      {
-        threadId,
-        input: [{ type: "text", text }],
-        effort: selectedMode === "plan" ? "high" : "medium",
-      },
-      {
-        threadId,
-        input: [{ type: "text", text }],
-      },
-    ];
+    this.log(
+      `[CODEX] turn/start options - mode: ${selectedMode}, model: ${
+        selectedModel || "auto"
+      }, effort: ${selectedEffort}`
+    );
+
+    const baseParams: Record<string, unknown> = {
+      threadId,
+      input: [{ type: "text", text }],
+    };
+
+    const extraCandidates: Record<string, unknown>[] = [];
+    if (selectedModel) {
+      extraCandidates.push({ model: selectedModel, effort: selectedEffort });
+      extraCandidates.push({
+        model: selectedModel,
+        reasoning: { effort: selectedEffort },
+      });
+      extraCandidates.push({ model: selectedModel, summary: "auto" });
+    }
+
+    extraCandidates.push({ effort: selectedEffort });
+    extraCandidates.push({ reasoning: { effort: selectedEffort } });
+    extraCandidates.push({ summary: "auto" });
+    extraCandidates.push({ personality: "default" });
+    extraCandidates.push({});
+
+    const seen = new Set<string>();
+    const candidateParams: Record<string, unknown>[] = [];
+    for (const extra of extraCandidates) {
+      const params = { ...baseParams, ...extra };
+      const key = JSON.stringify(params);
+      if (!seen.has(key)) {
+        seen.add(key);
+        candidateParams.push(params);
+      }
+    }
 
     let lastError: unknown = null;
     for (const params of candidateParams) {
@@ -1331,7 +1536,11 @@ export class CodexHandler {
     clientId?: string,
     newSession: boolean = false,
     agentMode: CodexAgentMode = "auto",
-    senderDeviceId?: string
+    senderDeviceId?: string,
+    model?: string,
+    reasoningEffort: CodexReasoningEffort = "auto",
+    useIdeContext: boolean = false,
+    useFlatMode: boolean = false
   ): Promise<void> {
     const effectiveClientId = this.getClientKey(clientId);
     if (!execute) {
@@ -1346,6 +1555,24 @@ export class CodexHandler {
     } else if (agentMode === "auto") {
       selectedMode = this.detectAgentMode(text) || "agent";
     }
+
+    const modelTrimmed = model?.trim();
+    const selectedModel =
+      modelTrimmed && modelTrimmed.length > 0 && modelTrimmed !== "auto"
+        ? modelTrimmed
+        : undefined;
+    const selectedEffort =
+      reasoningEffort && reasoningEffort !== "auto"
+        ? this.normalizeReasoningEffort(reasoningEffort)
+        : selectedMode === "plan"
+        ? "high"
+        : "medium";
+
+    this.log(
+      `[CODEX] prompt config - mode: ${selectedMode}, model: ${
+        selectedModel || "auto"
+      }, effort: ${selectedEffort}, useIdeContext: ${useIdeContext}, useFlatMode: ${useFlatMode}`
+    );
 
     await this.ensureServerReady();
     const threadId = await this.ensureThread(effectiveClientId, newSession);
@@ -1379,7 +1606,13 @@ export class CodexHandler {
 
     let turnStartResult: { turnId: string | null; immediateText: string };
     try {
-      turnStartResult = await this.startTurn(threadId, text, selectedMode);
+      turnStartResult = await this.startTurn(
+        threadId,
+        text,
+        selectedMode,
+        selectedModel,
+        selectedEffort
+      );
     } catch (error) {
       // 저장된 threadId가 만료/손상된 경우 새 thread로 1회 재시도
       this.logError(
@@ -1392,7 +1625,13 @@ export class CodexHandler {
         retryState.threadId = retryThreadId;
         this.clientTurnStates.set(effectiveClientId, retryState);
       }
-      turnStartResult = await this.startTurn(retryThreadId, text, selectedMode);
+      turnStartResult = await this.startTurn(
+        retryThreadId,
+        text,
+        selectedMode,
+        selectedModel,
+        selectedEffort
+      );
     }
 
     const state = this.clientTurnStates.get(effectiveClientId);

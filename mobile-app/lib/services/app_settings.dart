@@ -20,6 +20,8 @@ class AppSettings extends ChangeNotifier {
   static const String _keyThemeMode = 'theme_mode';
   static const String _keyShowHistory = 'show_history';
   static const String _keyDefaultAgentMode = 'default_agent_mode';
+  static const String _keyDefaultModel = 'default_model';
+  static const String _keyDefaultReasoningEffort = 'default_reasoning_effort';
   static const String _keyAutoConnect = 'auto_connect';
   static const String _keyConnectionHistory = 'connection_history';
 
@@ -30,6 +32,8 @@ class AppSettings extends ChangeNotifier {
   ThemeModeSetting _themeMode = ThemeModeSetting.system;
   bool _showHistory = false; // 기본값: 숨김
   String _defaultAgentMode = 'auto';
+  String _defaultModel = 'auto';
+  String _defaultReasoningEffort = 'auto';
   bool _autoConnect = false;
   List<ConnectionHistoryItem> _connectionHistory = [];
 
@@ -37,6 +41,8 @@ class AppSettings extends ChangeNotifier {
   ThemeModeSetting get themeMode => _themeMode;
   bool get showHistory => _showHistory;
   String get defaultAgentMode => _defaultAgentMode;
+  String get defaultModel => _defaultModel;
+  String get defaultReasoningEffort => _defaultReasoningEffort;
   bool get autoConnect => _autoConnect;
   List<ConnectionHistoryItem> get connectionHistory =>
       List.unmodifiable(_connectionHistory);
@@ -65,6 +71,13 @@ class AppSettings extends ChangeNotifier {
 
     // 기본 에이전트 모드
     _defaultAgentMode = prefs.getString(_keyDefaultAgentMode) ?? 'auto';
+
+    // 기본 모델
+    _defaultModel = prefs.getString(_keyDefaultModel) ?? 'auto';
+
+    // 기본 이성(추론) 수준
+    _defaultReasoningEffort =
+        prefs.getString(_keyDefaultReasoningEffort) ?? 'auto';
 
     // 자동 연결
     _autoConnect = prefs.getBool(_keyAutoConnect) ?? false;
@@ -99,6 +112,22 @@ class AppSettings extends ChangeNotifier {
     _defaultAgentMode = mode;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_keyDefaultAgentMode, mode);
+    notifyListeners();
+  }
+
+  // 기본 모델 설정
+  Future<void> setDefaultModel(String model) async {
+    _defaultModel = model;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyDefaultModel, model);
+    notifyListeners();
+  }
+
+  // 기본 이성(추론) 수준 설정
+  Future<void> setDefaultReasoningEffort(String effort) async {
+    _defaultReasoningEffort = effort;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyDefaultReasoningEffort, effort);
     notifyListeners();
   }
 

@@ -319,6 +319,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   String? _currentCodexSessionId; // 현재 Codex 세션 ID
   String? _currentClientId; // 현재 클라이언트 ID
   Timer? _pollTimer;
+  Timer? _capabilitiesLoadTimer;
   bool _isRelayPollInFlight = false;
 
   // 스트리밍 관련
@@ -334,6 +335,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool _loadingCommandApprovals = false;
   bool _loadingCommandEvents = false;
   DateTime? _lastCommandMetaRefreshAt;
+
   /// 같은 세션 재연결 시 메인 목록에 히스토리 반영용 (get_chat_history 응답 시 사용)
   bool _loadingSessionHistoryForDisplay = false;
 
@@ -352,8 +354,49 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool _isReconnecting = false;
   String? _lastConnectionError;
 
-  // 에이전트 모드 관련
-  String _selectedAgentMode = 'auto'; // auto, agent, ask, plan, debug
+  // 런타임 옵션 관련
+  String _selectedAgentMode = 'auto'; // 내부는 auto 유지
+  String _selectedModel = 'auto';
+  String _selectedReasoningEffort = 'auto';
+  bool _useIdeContext = false;
+  bool _useFlatMode = false;
+  bool _capabilitiesLoaded = false;
+  bool _capabilitiesLoading = false;
+  static const Set<String> _supportedAgentModes = {
+    'auto',
+    'agent',
+    'ask',
+    'plan',
+    'debug',
+  };
+  static const List<String> _fallbackAgentModes = [
+    'auto',
+    'agent',
+    'ask',
+    'plan',
+    'debug',
+  ];
+  static const List<Map<String, dynamic>> _fallbackModels = [
+    {
+      'model': 'gpt-5',
+      'displayName': 'GPT-5',
+      'isDefault': true,
+      'defaultReasoningEffort': 'medium',
+      'supportedReasoningEfforts': ['low', 'medium', 'high'],
+    },
+    {
+      'model': 'gpt-5-mini',
+      'displayName': 'GPT-5 mini',
+      'isDefault': false,
+      'defaultReasoningEffort': 'medium',
+      'supportedReasoningEfforts': ['low', 'medium', 'high'],
+    },
+  ];
+  List<String> _availableAgentModes = List<String>.from(_fallbackAgentModes);
+  List<Map<String, dynamic>> _availableModels =
+      List<Map<String, dynamic>>.from(_fallbackModels);
+  bool _supportsIdeContext = false;
+  bool _supportsFlatMode = false;
   String? _actualSelectedMode; // 자동 모드로 선택된 경우 실제 선택된 모드 (null이면 사용자가 직접 선택)
   MessageItem? _lastUserPrompt; // 마지막 User Prompt 메시지 (모드 업데이트용)
 
@@ -561,6 +604,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _isReconnecting = false;
         _reconnectAttempts = 0;
         _lastConnectionError = null;
+        _capabilitiesLoaded = false;
+        _capabilitiesLoading = false;
+        _supportsIdeContext = false;
+        _supportsFlatMode = false;
+        _useIdeContext = false;
+        _useFlatMode = false;
         _stopReconnect();
         _messages.add(MessageItem(
             '✅ Connected to Extension WebSocket server at $ip:$port',
@@ -704,11 +753,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 }
                 if (_loadingPastMessages) _loadingPastMessages = false;
               }
+            } else if (commandType == 'get_runtime_capabilities') {
+              _handleRuntimeCapabilitiesResponse(data as Map<String, dynamic>);
             }
 
             // 일반 명령 성공 메시지는 세션/히스토리 조회 시에는 표시하지 않음
             if (commandType != 'get_session_info' &&
-                commandType != 'get_chat_history') {
+                commandType != 'get_chat_history' &&
+                commandType != 'get_runtime_capabilities') {
               _messages.add(
                   MessageItem('✅ Command succeeded', type: MessageType.system));
             }
@@ -716,6 +768,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               _isWaitingForResponse = false;
             }
           } else {
+            if (data['command_type'] == 'get_runtime_capabilities') {
+              _capabilitiesLoadTimer?.cancel();
+              _capabilitiesLoading = false;
+            }
             _messages.add(MessageItem('❌ Command failed: ${data['error']}',
                 type: MessageType.system));
             _isWaitingForResponse = false;
@@ -861,6 +917,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           if (statusText.isNotEmpty) {
             _messages.add(MessageItem(statusText, type: MessageType.system));
           }
+        } else if (type == 'connected') {
+          _messages.add(MessageItem(
+              data['message']?.toString() ?? 'Connected to Codex Remote',
+              type: MessageType.system));
+          Future.delayed(const Duration(milliseconds: 150), () {
+            _loadRuntimeCapabilities();
+          });
         }
       });
       _scrollToBottom();
@@ -984,6 +1047,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           _reconnectAttempts = 0;
           _lastConnectionError = null;
           _lastCommandMetaRefreshAt = null;
+          _capabilitiesLoaded = false;
+          _capabilitiesLoading = false;
+          _supportsIdeContext = false;
+          _supportsFlatMode = false;
+          _useIdeContext = false;
+          _useFlatMode = false;
           _stopReconnect();
           _messages.add(MessageItem('✅ Connected to session $sessionId',
               type: MessageType.system));
@@ -1008,6 +1077,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
         // 폴링 시작
         _startPolling();
+        Future.delayed(const Duration(milliseconds: 120), () {
+          unawaited(_pollRelayMessagesOnce());
+        });
 
         // 같은 세션이면 이전 프롬프트/답변을 메인 목록에 가져오기 위해 해당 세션 히스토리 조회
         _loadingSessionHistoryForDisplay = true;
@@ -1017,6 +1089,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         Future.delayed(const Duration(milliseconds: 300), () {
           _loadCommandApprovals(silent: true);
           _loadCommandEvents(silent: true);
+        });
+        Future.delayed(const Duration(milliseconds: 200), () {
+          _loadRuntimeCapabilities();
         });
       } else if (response.statusCode == 403 &&
           (errorCode == 'PIN_REQUIRED' ||
@@ -1141,34 +1216,38 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _stopPolling(); // 기존 타이머 정지
 
     _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
-      if (!_isConnected || _sessionId == null || _isRelayPollInFlight) return;
-
-      _isRelayPollInFlight = true;
-      try {
-        final response = await http.get(
-          _relayUri('/api/poll', {
-            'sessionId': _sessionId!,
-            'deviceType': 'mobile',
-            'deviceId': _deviceId,
-          }),
-        );
-
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          if (data['success'] == true && data['data']['messages'] != null) {
-            final messages = data['data']['messages'] as List;
-            for (final msg in messages) {
-              _handleRelayMessage(msg);
-            }
-          }
-          unawaited(_refreshCommandMetaIfStale());
-        }
-      } catch (e) {
-        // 폴링 에러는 조용히 무시 (일시적인 네트워크 문제일 수 있음)
-      } finally {
-        _isRelayPollInFlight = false;
-      }
+      await _pollRelayMessagesOnce();
     });
+  }
+
+  Future<void> _pollRelayMessagesOnce() async {
+    if (!_isConnected || _sessionId == null || _isRelayPollInFlight) return;
+
+    _isRelayPollInFlight = true;
+    try {
+      final response = await http.get(
+        _relayUri('/api/poll', {
+          'sessionId': _sessionId!,
+          'deviceType': 'mobile',
+          'deviceId': _deviceId,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['success'] == true && data['data']['messages'] != null) {
+          final messages = data['data']['messages'] as List;
+          for (final msg in messages) {
+            _handleRelayMessage(msg);
+          }
+        }
+        unawaited(_refreshCommandMetaIfStale());
+      }
+    } catch (e) {
+      // 폴링 에러는 조용히 무시 (일시적인 네트워크 문제일 수 있음)
+    } finally {
+      _isRelayPollInFlight = false;
+    }
   }
 
   void _stopPolling() {
@@ -1244,11 +1323,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 setState(() => _loadingPastMessages = false);
               }
             }
+          } else if (commandType == 'get_runtime_capabilities') {
+            _handleRuntimeCapabilitiesResponse(
+                messageData as Map<String, dynamic>);
           }
 
           // 일반 명령 성공 메시지는 세션/히스토리 조회 시에는 표시하지 않음
           if (commandType != 'get_session_info' &&
-              commandType != 'get_chat_history') {
+              commandType != 'get_chat_history' &&
+              commandType != 'get_runtime_capabilities') {
             _messages.add(
                 MessageItem('✅ Command succeeded', type: MessageType.system));
           }
@@ -1256,6 +1339,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             _isWaitingForResponse = false;
           }
         } else {
+          if (messageData['command_type'] == 'get_runtime_capabilities') {
+            _capabilitiesLoadTimer?.cancel();
+            _capabilitiesLoading = false;
+          }
           _messages.add(MessageItem('❌ Command failed: ${messageData['error']}',
               type: MessageType.system));
           _isWaitingForResponse = false;
@@ -1559,6 +1646,215 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  String _normalizeAgentMode(String mode) {
+    return _supportedAgentModes.contains(mode) ? mode : 'auto';
+  }
+
+  String _getDefaultModelFromCapabilities() {
+    final models = _availableModels;
+    for (final model in models) {
+      if (model['isDefault'] == true) {
+        final value = (model['model'] ?? '').toString().trim();
+        if (value.isNotEmpty) return value;
+      }
+    }
+    if (models.isNotEmpty) {
+      final first = (models.first['model'] ?? '').toString().trim();
+      if (first.isNotEmpty) return first;
+    }
+    return 'auto';
+  }
+
+  List<String> _getAvailableReasoningEffortsForModel([String? model]) {
+    final normalizedModel = (model ?? _selectedModel).trim();
+    final efforts = <String>{};
+
+    if (normalizedModel == 'auto' || normalizedModel.isEmpty) {
+      for (final item in _availableModels) {
+        final raw = item['supportedReasoningEfforts'];
+        if (raw is List) {
+          for (final value in raw) {
+            final effort = value.toString().trim();
+            if (effort.isNotEmpty) {
+              efforts.add(effort);
+            }
+          }
+        }
+      }
+    } else {
+      for (final item in _availableModels) {
+        if ((item['model'] ?? '').toString().trim() == normalizedModel) {
+          final raw = item['supportedReasoningEfforts'];
+          if (raw is List) {
+            for (final value in raw) {
+              final effort = value.toString().trim();
+              if (effort.isNotEmpty) {
+                efforts.add(effort);
+              }
+            }
+          }
+          break;
+        }
+      }
+    }
+
+    if (efforts.isEmpty) {
+      efforts.addAll(['low', 'medium', 'high']);
+    }
+
+    final ordered = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+    return ordered.where((item) => efforts.contains(item)).toList();
+  }
+
+  String _getDefaultReasoningEffortForModel([String? model]) {
+    final normalizedModel = (model ?? _selectedModel).trim();
+    if (normalizedModel != 'auto' && normalizedModel.isNotEmpty) {
+      for (final item in _availableModels) {
+        if ((item['model'] ?? '').toString().trim() == normalizedModel) {
+          final value =
+              (item['defaultReasoningEffort'] ?? '').toString().trim();
+          if (value.isNotEmpty) return value;
+          break;
+        }
+      }
+    }
+
+    final available = _getAvailableReasoningEffortsForModel(normalizedModel);
+    return available.contains('medium')
+        ? 'medium'
+        : (available.isNotEmpty ? available.first : 'medium');
+  }
+
+  String _normalizeModel(String model) {
+    final normalized = model.trim();
+    if (normalized.isEmpty || normalized == 'auto') return 'auto';
+    final exists = _availableModels.any(
+      (item) => (item['model'] ?? '').toString().trim() == normalized,
+    );
+    return exists ? normalized : _getDefaultModelFromCapabilities();
+  }
+
+  String _normalizeReasoningEffort(String effort, [String? model]) {
+    final normalized = effort.trim();
+    if (normalized.isEmpty || normalized == 'auto') return 'auto';
+    final supported = _getAvailableReasoningEffortsForModel(model);
+    return supported.contains(normalized)
+        ? normalized
+        : _getDefaultReasoningEffortForModel(model);
+  }
+
+  String _getModelDisplayName(String model) {
+    if (model == 'auto') return 'Auto';
+    for (final item in _availableModels) {
+      if ((item['model'] ?? '').toString().trim() == model) {
+        final displayName = (item['displayName'] ?? '').toString().trim();
+        if (displayName.isNotEmpty) return displayName;
+      }
+    }
+    return model;
+  }
+
+  void _applyRuntimeCapabilities(Map<String, dynamic> capabilities) {
+    final rawAgentModes = capabilities['agentModes'];
+    final rawModels = capabilities['models'];
+    final ideContext = capabilities['ideContext'] as Map<String, dynamic>?;
+    final flatMode = capabilities['flatMode'] as Map<String, dynamic>?;
+    final defaults = capabilities['defaults'] as Map<String, dynamic>?;
+
+    final agentModes = rawAgentModes is List
+        ? rawAgentModes
+            .map((item) => _normalizeAgentMode(item.toString()))
+            .where((item) => item.isNotEmpty)
+            .toSet()
+            .toList()
+        : List<String>.from(_fallbackAgentModes);
+
+    final models = rawModels is List
+        ? rawModels
+            .whereType<Map>()
+            .map((item) => Map<String, dynamic>.from(item))
+            .where((item) => (item['model'] ?? '').toString().trim().isNotEmpty)
+            .toList()
+        : List<Map<String, dynamic>>.from(_fallbackModels);
+
+    final nextAgentModes = agentModes.isNotEmpty
+        ? agentModes
+        : List<String>.from(_fallbackAgentModes);
+    final nextModels = models.isNotEmpty
+        ? models
+        : List<Map<String, dynamic>>.from(_fallbackModels);
+
+    _availableAgentModes = nextAgentModes;
+    _availableModels = nextModels;
+    _supportsIdeContext = ideContext?['supported'] == true;
+    _supportsFlatMode = flatMode?['supported'] == true;
+    _capabilitiesLoaded = capabilities['ready'] == true;
+
+    final defaultAgentMode = _normalizeAgentMode(
+        (defaults?['agentMode'] ?? _selectedAgentMode).toString());
+    final defaultModel =
+        _normalizeModel((defaults?['model'] ?? _selectedModel).toString());
+    final defaultReasoning = _normalizeReasoningEffort(
+      (defaults?['reasoningEffort'] ?? _selectedReasoningEffort).toString(),
+      defaultModel,
+    );
+
+    _selectedAgentMode = _normalizeAgentMode(_selectedAgentMode);
+    if (!_availableAgentModes.contains(_selectedAgentMode)) {
+      _selectedAgentMode = defaultAgentMode;
+    }
+
+    final normalizedCurrentModel = _selectedModel.trim();
+    final hasSelectedModel = _availableModels.any(
+      (item) =>
+          (item['model'] ?? '').toString().trim() == normalizedCurrentModel,
+    );
+    if (normalizedCurrentModel.isEmpty || normalizedCurrentModel == 'auto') {
+      _selectedModel = 'auto';
+    } else if (!hasSelectedModel) {
+      _selectedModel = defaultModel;
+    } else {
+      _selectedModel = normalizedCurrentModel;
+    }
+
+    _selectedReasoningEffort =
+        _normalizeReasoningEffort(_selectedReasoningEffort, _selectedModel);
+    if (_selectedReasoningEffort != 'auto' &&
+        !_getAvailableReasoningEffortsForModel(_selectedModel)
+            .contains(_selectedReasoningEffort)) {
+      _selectedReasoningEffort = defaultReasoning;
+    }
+
+    if (_supportsIdeContext) {
+      _useIdeContext = ideContext?['defaultEnabled'] == true;
+    } else {
+      _useIdeContext = false;
+    }
+
+    if (_supportsFlatMode) {
+      _useFlatMode = flatMode?['defaultEnabled'] == true;
+    } else {
+      _useFlatMode = false;
+    }
+  }
+
+  void _handleRuntimeCapabilitiesResponse(Map<String, dynamic> payload) {
+    final data = payload['data'];
+    if (data is! Map<String, dynamic>) {
+      return;
+    }
+
+    _capabilitiesLoadTimer?.cancel();
+    _capabilitiesLoading = false;
+    _applyRuntimeCapabilities(data);
+    _messages.add(MessageItem(
+      '🧩 Runtime capabilities loaded: ${_availableModels.length} model(s), '
+      'IDE context ${_supportsIdeContext ? 'enabled' : 'unsupported'}, '
+      'flat mode ${_supportsFlatMode ? 'enabled' : 'unsupported'}',
+      type: MessageType.system,
+    ));
+  }
+
   // 텍스트 내용을 분석하여 적절한 에이전트 모드 자동 선택 (Extension의 detectAgentMode와 동일한 로직)
   String? _detectAgentMode(String text) {
     final lowerText = text.toLowerCase();
@@ -1657,6 +1953,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void _disconnect() {
     _stopPolling();
     _stopReconnect(); // 재연결 중지
+    _capabilitiesLoadTimer?.cancel();
 
     // 로컬 WebSocket 연결 종료
     _localWebSocket?.sink.close();
@@ -1673,6 +1970,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _loadingCommandApprovals = false;
         _loadingCommandEvents = false;
         _lastCommandMetaRefreshAt = null;
+        _capabilitiesLoaded = false;
+        _capabilitiesLoading = false;
+        _supportsIdeContext = false;
+        _supportsFlatMode = false;
+        _useIdeContext = false;
+        _useFlatMode = false;
         _messages.add(MessageItem('Disconnected', type: MessageType.system));
       });
     }
@@ -1749,7 +2052,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       String? sessionId,
       String? relaySessionId,
       int? limit,
-      String? agentMode}) async {
+      String? agentMode,
+      String? model,
+      String? reasoningEffort,
+      bool? useIdeContext,
+      bool? useFlatMode}) async {
     // 연결 상태 재확인
     _checkConnectionState();
 
@@ -1764,7 +2071,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     try {
       // agentMode가 제공되지 않으면 선택된 모드 사용 (또는 auto)
-      final mode = agentMode ?? _selectedAgentMode;
+      final mode = agentMode ?? 'auto';
+      // model/reasoning이 제공되지 않으면 현재 선택값 사용
+      final selectedModel = _normalizeModel((model ?? _selectedModel).trim());
+      final selectedReasoningEffort = _normalizeReasoningEffort(
+          (reasoningEffort ?? _selectedReasoningEffort).trim(), selectedModel);
+      final ideContextForCommand = prompt == true &&
+          _supportsIdeContext &&
+          (useIdeContext ?? _useIdeContext);
+      final flatModeForCommand =
+          prompt == true && _supportsFlatMode && (useFlatMode ?? _useFlatMode);
 
       // 자동 모드이고 프롬프트인 경우 텍스트를 분석하여 모드 미리 감지
       String? finalModeForCommand;
@@ -1776,6 +2092,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       } else if (mode != 'auto') {
         finalModeForCommand = mode;
       }
+
+      final modelForCommand = (prompt == true &&
+              selectedModel.isNotEmpty &&
+              selectedModel != 'auto')
+          ? selectedModel
+          : null;
+      final reasoningEffortForCommand = (prompt == true &&
+              selectedReasoningEffort.isNotEmpty &&
+              selectedReasoningEffort != 'auto')
+          ? selectedReasoningEffort
+          : null;
 
       final commandData = {
         'type': type,
@@ -1794,6 +2121,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         if (limit != null) 'limit': limit,
         // 자동 모드일 때도 감지된 모드를 전달하여 히스토리에 저장되도록 함
         if (finalModeForCommand != null) 'agentMode': finalModeForCommand,
+        if (modelForCommand != null) 'model': modelForCommand,
+        if (reasoningEffortForCommand != null)
+          'reasoningEffort': reasoningEffortForCommand,
+        if (ideContextForCommand) 'useIdeContext': true,
+        if (flatModeForCommand) 'useFlatMode': true,
       };
 
       // 프롬프트 전송 시 사용자 프롬프트를 별도로 기록하고 응답 대기 상태 설정
@@ -2357,8 +2689,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _loadConnectionSettings();
-    // 설정에서 기본 에이전트 모드 적용
-    _selectedAgentMode = AppSettings().defaultAgentMode;
+    // 설정에서 기본 프롬프트 옵션 적용
+    _selectedAgentMode = 'auto';
+    _selectedModel = _normalizeModel(AppSettings().defaultModel);
+    _selectedReasoningEffort =
+        _normalizeReasoningEffort(AppSettings().defaultReasoningEffort);
     // 설정 변경 리스너 추가
     AppSettings().addListener(_onAppSettingsChanged);
     _scrollController.addListener(_updateScrollButtonVisibility);
@@ -2382,8 +2717,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   void _onAppSettingsChanged() {
     if (mounted) {
+      final settings = AppSettings();
       setState(() {
-        // 설정 변경 시 UI 업데이트 (히스토리 표시 등)
+        // 설정 변경 시 UI 업데이트 (히스토리/기본 프롬프트 옵션 등)
+        _selectedAgentMode = 'auto';
+        _selectedModel = _normalizeModel(settings.defaultModel);
+        _selectedReasoningEffort =
+            _normalizeReasoningEffort(settings.defaultReasoningEffort);
       });
     }
   }
@@ -2454,7 +2794,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         await prefs.setString('pc_server_ip', _localIpController.text.trim());
       }
       if (_localPortController.text.trim().isNotEmpty) {
-        await prefs.setString('local_ws_port', _localPortController.text.trim());
+        await prefs.setString(
+            'local_ws_port', _localPortController.text.trim());
       }
       // 세션 ID 저장 (연결 성공 시)
       if (_sessionId != null && _sessionId!.isNotEmpty) {
@@ -2522,6 +2863,38 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _loadRuntimeCapabilities() async {
+    if (!_isConnected) return;
+
+    try {
+      setState(() {
+        _capabilitiesLoading = true;
+        _messages.add(MessageItem(
+            '🛰️ Requesting runtime capabilities from extension...',
+            type: MessageType.system));
+      });
+      _capabilitiesLoadTimer?.cancel();
+      _capabilitiesLoadTimer = Timer(const Duration(seconds: 4), () {
+        if (!mounted || !_capabilitiesLoading || _capabilitiesLoaded) return;
+        setState(() {
+          _capabilitiesLoading = false;
+          _messages.add(MessageItem(
+              '⚠️ Capability load delayed. Falling back to cached/default UI.',
+              type: MessageType.system));
+        });
+      });
+      await _sendCommand('get_runtime_capabilities',
+          clientId: _currentClientId);
+      if (_connectionType == ConnectionType.relay) {
+        Future.delayed(const Duration(milliseconds: 120), () {
+          unawaited(_pollRelayMessagesOnce());
+        });
+      }
+    } catch (e) {
+      // 에러는 조용히 무시
+    }
+  }
+
   Future<void> _refreshCommandMetaIfStale(
       {Duration minInterval = const Duration(seconds: 6)}) async {
     if (!_isConnected || _connectionType != ConnectionType.relay) return;
@@ -2556,8 +2929,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (!mounted) return;
       if (response.statusCode == 200 && body['success'] == true) {
         final data = body['data'] as Map<String, dynamic>? ?? {};
-        final approvals =
-            List<Map<String, dynamic>>.from((data['approvals'] as List? ?? [])
+        final approvals = List<Map<String, dynamic>>.from(
+            (data['approvals'] as List? ?? [])
                 .map((e) => Map<String, dynamic>.from(e as Map)));
 
         setState(() {
@@ -2567,7 +2940,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
         if (!silent) {
           setState(() {
-            _messages.add(MessageItem('🔐 Pending approvals: ${approvals.length}',
+            _messages.add(MessageItem(
+                '🔐 Pending approvals: ${approvals.length}',
                 type: MessageType.system));
           });
           _scrollToBottom();
@@ -2618,8 +2992,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (!mounted) return;
       if (response.statusCode == 200 && body['success'] == true) {
         final data = body['data'] as Map<String, dynamic>? ?? {};
-        final events =
-            List<Map<String, dynamic>>.from((data['events'] as List? ?? [])
+        final events = List<Map<String, dynamic>>.from(
+            (data['events'] as List? ?? [])
                 .map((e) => Map<String, dynamic>.from(e as Map)));
         setState(() {
           _recentCommandEvents = events;
@@ -2682,7 +3056,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         final status =
             (body['data'] as Map<String, dynamic>? ?? {})['status'] ?? action;
         setState(() {
-          _messages.add(MessageItem('✅ Approval resolved: $approvalId → $status',
+          _messages.add(MessageItem(
+              '✅ Approval resolved: $approvalId → $status',
               type: MessageType.system));
         });
         ScaffoldMessenger.of(context).showSnackBar(
@@ -2702,8 +3077,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _messages.add(
-            MessageItem('❌ Approval 처리 오류: $e', type: MessageType.system));
+        _messages
+            .add(MessageItem('❌ Approval 처리 오류: $e', type: MessageType.system));
       });
       _scrollToBottom();
     }
@@ -2806,6 +3181,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _scrollController.removeListener(_updateScrollButtonVisibility);
     WidgetsBinding.instance.removeObserver(this);
     AppSettings().removeListener(_onAppSettingsChanged);
+    _capabilitiesLoadTimer?.cancel();
     _stopPolling();
     _localWebSocket?.sink.close();
     _commandController.dispose();
@@ -4327,7 +4703,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          // 에이전트 모드 선택
                           Row(
                             children: [
                               Container(
@@ -4339,7 +4714,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: Icon(
-                                  Icons.smart_toy,
+                                  Icons.tune,
                                   size: 18,
                                   color: Theme.of(context)
                                       .colorScheme
@@ -4348,7 +4723,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                               ),
                               const SizedBox(width: 12),
                               Text(
-                                '에이전트 모드',
+                                '모델 설정',
                                 style: TextStyle(
                                   fontSize: 14,
                                   fontWeight: FontWeight.w600,
@@ -4356,156 +4731,272 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                       Theme.of(context).colorScheme.onSurface,
                                 ),
                               ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Container(
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          if (_capabilitiesLoading && !_capabilitiesLoaded)
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .surfaceContainerHighest,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .outline
+                                      .withOpacity(0.2),
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      '모델 목록을 불러오는 중...',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          else ...[
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 12, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .surfaceContainerHighest,
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .outline
+                                            .withOpacity(0.2),
+                                        width: 1,
+                                      ),
+                                    ),
+                                    child: DropdownButton<String>(
+                                      value: _selectedModel == 'auto' ||
+                                              _availableModels.any((item) =>
+                                                  (item['model'] ?? '')
+                                                      .toString()
+                                                      .trim() ==
+                                                  _selectedModel)
+                                          ? _selectedModel
+                                          : 'auto',
+                                      isExpanded: true,
+                                      isDense: true,
+                                      underline: Container(),
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurface,
+                                      ),
+                                      dropdownColor:
+                                          Theme.of(context).colorScheme.surface,
+                                      icon: Icon(
+                                        Icons.arrow_drop_down,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
+                                      ),
+                                      items: [
+                                        const DropdownMenuItem(
+                                          value: 'auto',
+                                          child: Text('Model: Auto (기본값)',
+                                              style: TextStyle(fontSize: 12)),
+                                        ),
+                                        ..._availableModels.map((item) {
+                                          final model =
+                                              (item['model'] ?? '').toString();
+                                          final displayName =
+                                              _getModelDisplayName(
+                                                  model.trim());
+                                          return DropdownMenuItem(
+                                            value: model.trim(),
+                                            child: Text(
+                                              'Model: $displayName',
+                                              style:
+                                                  const TextStyle(fontSize: 12),
+                                            ),
+                                          );
+                                        }),
+                                      ],
+                                      onChanged: (value) {
+                                        if (value != null) {
+                                          setState(() {
+                                            _selectedModel =
+                                                _normalizeModel(value);
+                                            _selectedReasoningEffort =
+                                                _normalizeReasoningEffort(
+                                                    _selectedReasoningEffort,
+                                                    _selectedModel);
+                                          });
+                                          unawaited(AppSettings()
+                                              .setDefaultModel(_selectedModel));
+                                        }
+                                      },
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 12, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .surfaceContainerHighest,
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .outline
+                                            .withOpacity(0.2),
+                                        width: 1,
+                                      ),
+                                    ),
+                                    child: DropdownButton<String>(
+                                      value: _selectedReasoningEffort ==
+                                                  'auto' ||
+                                              _getAvailableReasoningEffortsForModel(
+                                                      _selectedModel)
+                                                  .contains(
+                                                      _selectedReasoningEffort)
+                                          ? _selectedReasoningEffort
+                                          : 'auto',
+                                      isExpanded: true,
+                                      isDense: true,
+                                      underline: Container(),
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurface,
+                                      ),
+                                      dropdownColor:
+                                          Theme.of(context).colorScheme.surface,
+                                      icon: Icon(
+                                        Icons.arrow_drop_down,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
+                                      ),
+                                      items: [
+                                        const DropdownMenuItem(
+                                          value: 'auto',
+                                          child: Text('Reasoning: Auto',
+                                              style: TextStyle(fontSize: 12)),
+                                        ),
+                                        ..._getAvailableReasoningEffortsForModel(
+                                                _selectedModel)
+                                            .map((effort) => DropdownMenuItem(
+                                                  value: effort,
+                                                  child: Text(
+                                                    'Reasoning: ${effort[0].toUpperCase()}${effort.substring(1)}',
+                                                    style: const TextStyle(
+                                                        fontSize: 12),
+                                                  ),
+                                                )),
+                                      ],
+                                      onChanged: (value) {
+                                        if (value != null) {
+                                          setState(() {
+                                            _selectedReasoningEffort =
+                                                _normalizeReasoningEffort(
+                                                    value, _selectedModel);
+                                          });
+                                          unawaited(AppSettings()
+                                              .setDefaultReasoningEffort(
+                                                  _selectedReasoningEffort));
+                                        }
+                                      },
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.only(top: 6.0),
+                              child: Text(
+                                'Models: ${_availableModels.length} · Selected: ${_getModelDisplayName(_selectedModel)} · Reasoning options: ${_getAvailableReasoningEffortsForModel(_selectedModel).join(", ")}',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                Container(
                                   padding: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 4),
+                                      horizontal: 10, vertical: 6),
                                   decoration: BoxDecoration(
                                     color: Theme.of(context)
                                         .colorScheme
                                         .surfaceContainerHighest,
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .outline
-                                          .withOpacity(0.2),
-                                      width: 1,
-                                    ),
+                                    borderRadius: BorderRadius.circular(10),
                                   ),
-                                  child: DropdownButton<String>(
-                                    value: _selectedAgentMode,
-                                    isExpanded: true,
-                                    isDense: true,
-                                    underline: Container(),
+                                  child: Text(
+                                    _capabilitiesLoaded
+                                        ? 'Capabilities loaded'
+                                        : 'Using fallback capabilities',
                                     style: TextStyle(
-                                      fontSize: 13,
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .onSurface,
-                                    ),
-                                    dropdownColor:
-                                        Theme.of(context).colorScheme.surface,
-                                    icon: Icon(
-                                      Icons.arrow_drop_down,
+                                      fontSize: 11,
                                       color: Theme.of(context)
                                           .colorScheme
                                           .onSurfaceVariant,
                                     ),
-                                    items: const [
-                                      DropdownMenuItem(
-                                        value: 'auto',
-                                        child: Row(
-                                          children: [
-                                            Icon(Icons.auto_awesome, size: 16),
-                                            SizedBox(width: 4),
-                                            Text('Auto (자동 선택)',
-                                                style: TextStyle(fontSize: 12)),
-                                          ],
-                                        ),
-                                      ),
-                                      DropdownMenuItem(
-                                        value: 'agent',
-                                        child: Row(
-                                          children: [
-                                            Icon(Icons.code, size: 16),
-                                            SizedBox(width: 4),
-                                            Text('Agent (코딩 작업)',
-                                                style: TextStyle(fontSize: 12)),
-                                          ],
-                                        ),
-                                      ),
-                                      DropdownMenuItem(
-                                        value: 'ask',
-                                        child: Row(
-                                          children: [
-                                            Icon(Icons.help_outline, size: 16),
-                                            SizedBox(width: 4),
-                                            Text('Ask (질문/학습)',
-                                                style: TextStyle(fontSize: 12)),
-                                          ],
-                                        ),
-                                      ),
-                                      DropdownMenuItem(
-                                        value: 'plan',
-                                        child: Row(
-                                          children: [
-                                            Icon(Icons.assignment, size: 16),
-                                            SizedBox(width: 4),
-                                            Text('Plan (계획 수립)',
-                                                style: TextStyle(fontSize: 12)),
-                                          ],
-                                        ),
-                                      ),
-                                      DropdownMenuItem(
-                                        value: 'debug',
-                                        child: Row(
-                                          children: [
-                                            Icon(Icons.bug_report, size: 16),
-                                            SizedBox(width: 4),
-                                            Text('Debug (버그 수정)',
-                                                style: TextStyle(fontSize: 12)),
-                                          ],
-                                        ),
-                                      ),
-                                    ],
-                                    onChanged: (value) {
-                                      if (value != null) {
-                                        setState(() {
-                                          _selectedAgentMode = value;
-                                          // 사용자가 직접 모드를 선택하면 실제 모드 표시 초기화
-                                          if (value != 'auto') {
-                                            _actualSelectedMode = null;
-                                          }
-                                        });
-                                      }
-                                    },
                                   ),
                                 ),
-                              ),
-                            ],
-                          ),
-                          // 자동 모드로 선택된 경우 실제 모드 표시
-                          if (_selectedAgentMode == 'auto' &&
-                              _actualSelectedMode != null)
-                            Padding(
-                              padding:
-                                  const EdgeInsets.only(top: 8.0, left: 42.0),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .primaryContainer
-                                      .withOpacity(0.3),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      Icons.info_outline,
-                                      size: 14,
-                                      color:
-                                          Theme.of(context).colorScheme.primary,
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      '실제 모드: ${_getModeDisplayName(_actualSelectedMode!)}',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w500,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .onPrimaryContainer,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
+                                if (_supportsIdeContext)
+                                  FilterChip(
+                                    label: const Text('IDE Context'),
+                                    selected: _useIdeContext,
+                                    onSelected: (selected) {
+                                      setState(() {
+                                        _useIdeContext = selected;
+                                      });
+                                    },
+                                  ),
+                                if (_supportsFlatMode)
+                                  FilterChip(
+                                    label: const Text('Flat Mode'),
+                                    selected: _useFlatMode,
+                                    onSelected: (selected) {
+                                      setState(() {
+                                        _useFlatMode = selected;
+                                      });
+                                    },
+                                  ),
+                              ],
                             ),
+                          ],
                           const SizedBox(height: 8),
                           // KeyboardListener: Enter 전송. 컨트롤러에서 읽고 debounce + 전송 후 한 프레임 뒤 재정리로 IME 중복 전송 방지.
                           // (Focus+동일 FocusNode는 focus_manager assertion 유발로 사용 안 함)
@@ -5171,11 +5662,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                         final riskLevel =
                                             policy['risk_level']?.toString() ??
                                                 'unknown';
-                                        final reasons = (policy['reasons']
-                                                    as List? ??
-                                                [])
-                                            .map((e) => e.toString())
-                                            .join(', ');
+                                        final reasons =
+                                            (policy['reasons'] as List? ?? [])
+                                                .map((e) => e.toString())
+                                                .join(', ');
                                         return Card(
                                           margin: const EdgeInsets.fromLTRB(
                                               12, 4, 12, 4),
@@ -5258,8 +5748,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                               approvalId,
                                                               'reject');
                                                         },
-                                                        child:
-                                                            const Text('Reject'),
+                                                        child: const Text(
+                                                            'Reject'),
                                                       ),
                                                     ),
                                                     const SizedBox(width: 8),
@@ -5270,8 +5760,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                               approvalId,
                                                               'approve');
                                                         },
-                                                        child:
-                                                            const Text('Approve'),
+                                                        child: const Text(
+                                                            'Approve'),
                                                       ),
                                                     ),
                                                   ],
@@ -5335,9 +5825,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                         final status =
                                             result['status']?.toString() ??
                                                 'unknown';
-                                        final raw = command['raw']
-                                                ?.toString() ??
-                                            '(unknown)';
+                                        final raw =
+                                            command['raw']?.toString() ??
+                                                '(unknown)';
                                         final approvalStatus =
                                             approval['status']?.toString() ??
                                                 'not_required';

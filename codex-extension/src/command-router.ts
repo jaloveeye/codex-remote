@@ -87,6 +87,9 @@ export class CommandRouter {
         case "get_chat_history":
           result = await this.handleGetChatHistory(command);
           break;
+        case "get_runtime_capabilities":
+          result = await this.handleGetRuntimeCapabilities();
+          break;
         case "get_active_file":
           result = await this.handleGetActiveFile();
           break;
@@ -275,13 +278,24 @@ export class CommandRouter {
         this.log("Routing to prompt");
         const newSession = command.newSession === true;
         const agentMode = command.agentMode || "auto";
+        const model = command.model?.trim() || undefined;
+        const reasoningEffort =
+          command.reasoningEffort && command.reasoningEffort !== "auto"
+            ? command.reasoningEffort
+            : undefined;
+        const useIdeContext = command.useIdeContext === true;
+        const useFlatMode = command.useFlatMode === true;
         await this.commandHandler.insertToPrompt(
           text,
           execute,
           command.clientId,
           newSession,
           agentMode,
-          command.senderDeviceId
+          command.senderDeviceId,
+          model,
+          reasoningEffort,
+          useIdeContext,
+          useFlatMode
         );
         return {
           success: true,
@@ -352,6 +366,21 @@ export class CommandRouter {
       limit
     );
     return { success: true, data: history };
+  }
+
+  /**
+   * Handle get_runtime_capabilities
+   */
+  private async handleGetRuntimeCapabilities(): Promise<CommandResult> {
+    this.log("Fetching runtime capabilities from Codex handler");
+    const capabilities = await this.commandHandler.getRuntimeCapabilities();
+    const models = Array.isArray((capabilities as any)?.models)
+      ? ((capabilities as any).models as unknown[])
+      : [];
+    this.log(
+      `Runtime capabilities ready=${(capabilities as any)?.ready === true}, models=${models.length}`
+    );
+    return { success: true, data: capabilities };
   }
 
   /**

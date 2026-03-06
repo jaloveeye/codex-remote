@@ -65,6 +65,9 @@ class CommandRouter {
                 case "get_chat_history":
                     result = await this.handleGetChatHistory(command);
                     break;
+                case "get_runtime_capabilities":
+                    result = await this.handleGetRuntimeCapabilities();
+                    break;
                 case "get_active_file":
                     result = await this.handleGetActiveFile();
                     break;
@@ -221,7 +224,13 @@ class CommandRouter {
                 this.log("Routing to prompt");
                 const newSession = command.newSession === true;
                 const agentMode = command.agentMode || "auto";
-                await this.commandHandler.insertToPrompt(text, execute, command.clientId, newSession, agentMode, command.senderDeviceId);
+                const model = command.model?.trim() || undefined;
+                const reasoningEffort = command.reasoningEffort && command.reasoningEffort !== "auto"
+                    ? command.reasoningEffort
+                    : undefined;
+                const useIdeContext = command.useIdeContext === true;
+                const useFlatMode = command.useFlatMode === true;
+                await this.commandHandler.insertToPrompt(text, execute, command.clientId, newSession, agentMode, command.senderDeviceId, model, reasoningEffort, useIdeContext, useFlatMode);
                 return {
                     success: true,
                     message: execute
@@ -273,6 +282,18 @@ class CommandRouter {
         const limit = command.limit || 50;
         const history = await this.commandHandler.getChatHistory(clientId, sessionId, relaySessionId, limit);
         return { success: true, data: history };
+    }
+    /**
+     * Handle get_runtime_capabilities
+     */
+    async handleGetRuntimeCapabilities() {
+        this.log("Fetching runtime capabilities from Codex handler");
+        const capabilities = await this.commandHandler.getRuntimeCapabilities();
+        const models = Array.isArray(capabilities?.models)
+            ? capabilities.models
+            : [];
+        this.log(`Runtime capabilities ready=${capabilities?.ready === true}, models=${models.length}`);
+        return { success: true, data: capabilities };
     }
     /**
      * Handle get_active_file

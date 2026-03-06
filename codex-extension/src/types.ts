@@ -7,6 +7,14 @@ import { CommandHandler } from "./command-handler";
 import { WebSocketServer } from "./websocket-server";
 
 export type AgentMode = "agent" | "ask" | "plan" | "debug" | "auto";
+export type ReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "auto";
 export type AIProvider = "codex";
 
 export interface CommandMessage {
@@ -25,6 +33,10 @@ export interface CommandMessage {
   relaySessionId?: string;
   limit?: number;
   agentMode?: AgentMode;
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
+  useIdeContext?: boolean;
+  useFlatMode?: boolean;
   senderDeviceId?: string;
   provider?: AIProvider; // backward-compatible field; codex only
 }

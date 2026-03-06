@@ -189,13 +189,21 @@ export class CommandHandler {
     clientId?: string,
     newSession: boolean = false,
     agentMode: "agent" | "ask" | "plan" | "debug" | "auto" = "auto",
-    senderDeviceId?: string
+    senderDeviceId?: string,
+    model?: string,
+    reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh",
+    useIdeContext?: boolean,
+    useFlatMode?: boolean
   ): Promise<void> {
     this.log(
       `[Codex Remote] insertToPrompt called - textLength: ${text.length}, execute: ${execute}, clientId: ${
         clientId || "none"
       }, newSession: ${newSession}, agentMode: ${agentMode}, senderDeviceId: ${
         senderDeviceId || "none"
+      }, model: ${model || "auto"}, reasoningEffort: ${
+        reasoningEffort || "auto"
+      }, useIdeContext: ${useIdeContext ?? false}, useFlatMode: ${
+        useFlatMode ?? false
       }`
     );
 
@@ -209,7 +217,11 @@ export class CommandHandler {
       clientId,
       newSession,
       agentMode,
-      senderDeviceId
+      senderDeviceId,
+      model,
+      reasoningEffort,
+      useIdeContext,
+      useFlatMode
     );
   }
 
@@ -267,6 +279,18 @@ export class CommandHandler {
       ? this.codexHandler.getChatHistory(clientId, sessionId, relaySessionId, limit)
       : [];
     return { entries };
+  }
+
+  async getRuntimeCapabilities(): Promise<any> {
+    if (!this.codexHandler) {
+      return {
+        provider: "codex",
+        ready: false,
+        models: [],
+        agentModes: ["auto", "agent", "ask", "plan", "debug"],
+      };
+    }
+    return this.codexHandler.getRuntimeCapabilities();
   }
 
   async stopPrompt(): Promise<{ success: boolean }> {

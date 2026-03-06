@@ -173,12 +173,12 @@ class CommandHandler {
             throw new Error(`터미널 입력 실패: ${errorMsg}`);
         }
     }
-    async insertToPrompt(text, execute = false, clientId, newSession = false, agentMode = "auto", senderDeviceId) {
-        this.log(`[Codex Remote] insertToPrompt called - textLength: ${text.length}, execute: ${execute}, clientId: ${clientId || "none"}, newSession: ${newSession}, agentMode: ${agentMode}, senderDeviceId: ${senderDeviceId || "none"}`);
+    async insertToPrompt(text, execute = false, clientId, newSession = false, agentMode = "auto", senderDeviceId, model, reasoningEffort, useIdeContext, useFlatMode) {
+        this.log(`[Codex Remote] insertToPrompt called - textLength: ${text.length}, execute: ${execute}, clientId: ${clientId || "none"}, newSession: ${newSession}, agentMode: ${agentMode}, senderDeviceId: ${senderDeviceId || "none"}, model: ${model || "auto"}, reasoningEffort: ${reasoningEffort || "auto"}, useIdeContext: ${useIdeContext ?? false}, useFlatMode: ${useFlatMode ?? false}`);
         if (!this.codexHandler) {
             throw new Error("Codex handler is not initialized.");
         }
-        await this.codexHandler.sendPrompt(text, execute, clientId, newSession, agentMode, senderDeviceId);
+        await this.codexHandler.sendPrompt(text, execute, clientId, newSession, agentMode, senderDeviceId, model, reasoningEffort, useIdeContext, useFlatMode);
     }
     async executeCommand(command, ...args) {
         return await vscode.commands.executeCommand(command, ...args);
@@ -222,6 +222,17 @@ class CommandHandler {
             ? this.codexHandler.getChatHistory(clientId, sessionId, relaySessionId, limit)
             : [];
         return { entries };
+    }
+    async getRuntimeCapabilities() {
+        if (!this.codexHandler) {
+            return {
+                provider: "codex",
+                ready: false,
+                models: [],
+                agentModes: ["auto", "agent", "ask", "plan", "debug"],
+            };
+        }
+        return this.codexHandler.getRuntimeCapabilities();
     }
     async stopPrompt() {
         this.log("[Codex Remote] stopPrompt called");

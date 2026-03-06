@@ -73,46 +73,43 @@ class StatusBarManager {
             ? this.relayClient.isConnectedToSession()
             : false;
         const connected = hasLocalClient || hasRelaySession;
+        this.statusBarItem.text = "🐸 ●";
         if (this.wsServer && this.wsServer.isRunning()) {
             if (connected) {
                 if (hasRelaySession && this.relayClient) {
                     const sessionId = this.relayClient.getSessionId();
-                    this.statusBarItem.text =
-                        sessionId != null
-                            ? `$(cloud) Codex Remote: Connected (세션: ${sessionId})`
-                            : "$(cloud) Codex Remote: Connected";
                     this.statusBarItem.tooltip =
                         (sessionId != null
                             ? `Codex Remote: 릴레이 세션 ${sessionId}`
                             : "Codex Remote: 릴레이 세션에 연결됨") +
                             " · 클릭: 연결 정보 보기";
+                    this.statusBarItem.color = new vscode.ThemeColor("terminal.ansiGreen");
                 }
                 else {
-                    this.statusBarItem.text = "$(cloud) Codex Remote: Connected";
                     this.statusBarItem.tooltip =
                         "Codex Remote: 클라이언트 연결됨 · 클릭: 연결 정보 보기";
+                    this.statusBarItem.color = new vscode.ThemeColor("terminal.ansiGreen");
                 }
                 this.statusBarItem.backgroundColor = undefined;
             }
             else if (!hasRelaySession) {
-                this.statusBarItem.text = "$(cloud) Codex Remote: 비활성";
                 this.statusBarItem.tooltip =
                     "Codex Remote: 릴레이 끔 · 클릭: 세션 ID·PIN 입력하여 연결";
-                this.statusBarItem.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
+                this.statusBarItem.backgroundColor = undefined;
+                this.statusBarItem.color = new vscode.ThemeColor("terminal.ansiRed");
             }
             else {
-                this.statusBarItem.text =
-                    "$(cloud) Codex Remote: Ready (waiting for client)";
                 this.statusBarItem.tooltip =
                     "Codex Remote: 클라이언트 대기 중 · 클릭: 연결 정보 보기";
-                this.statusBarItem.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
+                this.statusBarItem.backgroundColor = undefined;
+                this.statusBarItem.color = new vscode.ThemeColor("terminal.ansiRed");
             }
         }
         else {
-            this.statusBarItem.text = "$(cloud-off) Codex Remote: Stopped";
             this.statusBarItem.tooltip =
                 "Codex Remote: 서버 중지됨 · 클릭: 연결 정보 보기";
-            this.statusBarItem.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
+            this.statusBarItem.backgroundColor = undefined;
+            this.statusBarItem.color = new vscode.ThemeColor("terminal.ansiRed");
         }
         this.statusBarItem.show();
     }

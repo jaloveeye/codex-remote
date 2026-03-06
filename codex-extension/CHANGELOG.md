@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.0
+
+- Show Codex Remote in the status bar as a frog face icon with red/green state colors
+- Align the extension package version to 0.1.0
+
+## 0.4.7
+
+- Show Codex Remote in the status bar as a single arrow icon with red/green state colors
+
+## 0.4.6
+
+- Add runtime capability handshake so clients can load live model/reasoning options from Codex CLI
+- Improve relay client capability refresh responsiveness
+- Simplify status bar to icon-only state indicators
+
 ## 0.4.5
 
 - Bump VSIX release version for fresh install validation
