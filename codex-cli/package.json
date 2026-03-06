@@ -1,0 +1,40 @@
+{
+  "name": "codex-remote-cli",
+  "version": "1.0.0",
+  "description": "Legacy CLI client for Codex Remote (deprecated)",
+  "main": "dist/index.js",
+  "bin": {
+    "codex-chat": "./dist/index.js",
+    "codex-remote": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "keywords": [
+    "codex",
+    "cli",
+    "remote"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.14.2",
+    "commander": "^11.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.3.3",
+    "ts-node": "^10.9.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/codex-remote.git"
+  },
+  "homepage": "https://github.com/your-org/codex-remote",
+  "bugs": {
+    "url": "https://github.com/your-org/codex-remote/issues"
+  }
+}

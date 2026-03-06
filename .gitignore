@@ -1,0 +1,32 @@
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Environment / local secrets
+.env
+.env.local
+.env.*.local
+
+# Build / cache outputs
+dist/
+build/
+coverage/
+.dart_tool/
+.pub/
+.pub-cache/
+.flutter-plugins-dependencies
+.vercel/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# Packaged extension artifacts
+*.vsix

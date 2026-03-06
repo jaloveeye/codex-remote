@@ -1,0 +1,37 @@
+{
+  "name": "codex-relay-server",
+  "version": "1.0.0",
+  "description": "Codex Relay Server for Vercel",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "vercel build",
+    "deploy": "vercel --prod",
+    "type-check": "tsc --noEmit",
+    "validate:command-event": "node scripts/validate-command-event-example.mjs",
+    "test:command-policy": "node --experimental-strip-types scripts/test-command-policy.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "@upstash/redis": "^1.34.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@vercel/node": "^4.0.0",
+    "dotenv": "^17.2.3",
+    "typescript": "^5.3.0",
+    "vercel": "^41.0.2"
+  },
+  "engines": {
+    "node": "20.x"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/codex-remote.git"
+  },
+  "homepage": "https://github.com/your-org/codex-remote",
+  "bugs": {
+    "url": "https://github.com/your-org/codex-remote/issues"
+  }
+}

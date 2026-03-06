@@ -1,0 +1,37 @@
+{
+  "name": "codex-remote",
+  "version": "0.1.0",
+  "description": "Control Codex from your mobile device",
+  "author": {
+    "name": "김형진",
+    "email": "jaloveeye@gmail.com",
+    "url": "https://github.com/your-org/codex-remote"
+  },
+  "workspaces": [
+    "codex-extension",
+    "pc-server"
+  ],
+  "scripts": {
+    "install:all": "npm install && cd codex-extension && npm install && cd ../pc-server && npm install",
+    "build:extension": "cd codex-extension && npm run compile",
+    "start:server": "cd pc-server && npm start",
+    "dev:extension": "cd codex-extension && npm run watch",
+    "dev:server": "cd pc-server && npm run dev"
+  },
+  "keywords": [
+    "codex",
+    "ide",
+    "remote",
+    "mobile",
+    "websocket"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/codex-remote.git"
+  },
+  "homepage": "https://github.com/your-org/codex-remote",
+  "bugs": {
+    "url": "https://github.com/your-org/codex-remote/issues"
+  }
+}

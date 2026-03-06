@@ -1,0 +1,1499 @@
+import * as child_process from "child_process";
+import * as readline from "readline";
+import * as vscode from "vscode";
+import { WebSocketServer } from "./websocket-server";
+import { CONFIG } from "./config";
+
+type CodexAgentMode = "agent" | "ask" | "plan" | "debug" | "auto";
+
+interface JsonRpcErrorShape {
+  code?: number;
+  message?: string;
+  data?: unknown;
+}
+
+interface PendingRequest {
+  method: string;
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
+interface ClientTurnState {
+  threadId: string;
+  turnId: string | null;
+  accumulatedText: string;
+  hasChunks: boolean;
+  senderDeviceId: string | null;
+}
+
+interface CodexChatHistoryEntry {
+  id: string;
+  sessionId: string;
+  clientId: string;
+  userMessage: string;
+  assistantResponse: string;
+  timestamp: string;
+  agentMode?: string;
+  provider: "codex";
+}
+
+type CodexSetupIssue = "cli-unavailable" | "auth-required" | "startup-failed";
+type CodexCliStatusState =
+  | "unknown"
+  | "cli-available"
+  | "ready"
+  | CodexSetupIssue;
+
+interface CodexSetupDiagnostic {
+  issue: CodexSetupIssue;
+  severity: "warning" | "error";
+  message: string;
+}
+
+export interface CodexCliStatus {
+  state: CodexCliStatusState;
+  severity: "info" | "warning" | "error";
+  summary: string;
+  checkedAt: string | null;
+  command: string;
+}
+
+export class CodexHandler {
+  private outputChannel: vscode.OutputChannel | null = null;
+  private wsServer: WebSocketServer | null = null;
+  private workspaceRoot: string | null = null;
+
+  private codexProcess: child_process.ChildProcessWithoutNullStreams | null =
+    null;
+  private stdoutReader: readline.Interface | null = null;
+  private stderrReader: readline.Interface | null = null;
+  private nextRequestId = 1;
+  private pendingRequests = new Map<number, PendingRequest>();
+  private initPromise: Promise<void> | null = null;
+  private initialized = false;
+
+  private clientThreads = new Map<string, string>();
+  private threadToClient = new Map<string, string>();
+  private clientTurnStates = new Map<string, ClientTurnState>();
+  private turnToClient = new Map<string, string>();
+
+  private chatHistory: CodexChatHistoryEntry[] = [];
+  private pendingHistoryByClient = new Map<string, string>();
+  private recentStderrLines: string[] = [];
+  private shownSetupDiagnostics = new Set<CodexSetupIssue>();
+  private hasConfirmedCodexCommand = false;
+  private codexCliStatus: CodexCliStatus = {
+    state: "unknown",
+    severity: "info",
+    summary: "아직 확인되지 않음",
+    checkedAt: null,
+    command: CONFIG.CODEX_COMMAND,
+  };
+  private onCodexCliStatusChange: (() => void) | null = null;
+
+  constructor(
+    outputChannel?: vscode.OutputChannel,
+    wsServer?: WebSocketServer,
+    workspaceRoot?: string
+  ) {
+    this.outputChannel = outputChannel || null;
+    this.wsServer = wsServer || null;
+    this.workspaceRoot = workspaceRoot || null;
+  }
+
+  private log(message: string, sendToClient: boolean = false): void {
+    const timestamp = new Date().toLocaleTimeString();
+    const formatted = `[${timestamp}] [CODEX] ${message}`;
+    if (this.outputChannel) {
+      this.outputChannel.appendLine(formatted);
+    }
+    console.log(formatted);
+
+    if (sendToClient && this.wsServer) {
+      this.wsServer.broadcast(
+        JSON.stringify({
+          type: "log",
+          level: "info",
+          message: `[CODEX] ${message}`,
+          timestamp: new Date().toISOString(),
+          source: "codex",
+        })
+      );
+    }
+  }
+
+  private logError(message: string, error?: unknown): void {
+    const timestamp = new Date().toLocaleTimeString();
+    const errorText = error instanceof Error ? error.message : String(error ?? "");
+    const formatted = `[${timestamp}] [CODEX] ERROR: ${message}${
+      errorText ? ` - ${errorText}` : ""
+    }`;
+    if (this.outputChannel) {
+      this.outputChannel.appendLine(formatted);
+    }
+    console.error(formatted);
+
+    if (this.wsServer) {
+      this.wsServer.broadcast(
+        JSON.stringify({
+          type: "log",
+          level: "error",
+          message: `[CODEX] ${message}`,
+          timestamp: new Date().toISOString(),
+          source: "codex",
+          error: errorText || undefined,
+        })
+      );
+    }
+  }
+
+  private setCodexCliStatus(
+    state: CodexCliStatusState,
+    severity: "info" | "warning" | "error",
+    summary: string
+  ): void {
+    this.codexCliStatus = {
+      state,
+      severity,
+      summary,
+      checkedAt: new Date().toISOString(),
+      command: CONFIG.CODEX_COMMAND,
+    };
+
+    if (this.onCodexCliStatusChange) {
+      this.onCodexCliStatusChange();
+    }
+  }
+
+  private rememberStderrLine(line: string): void {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+
+    this.recentStderrLines.push(trimmed);
+    if (this.recentStderrLines.length > 12) {
+      this.recentStderrLines.shift();
+    }
+  }
+
+  private getDiagnosticContext(source?: unknown): string {
+    const parts: string[] = [];
+    const sourceText =
+      source instanceof Error
+        ? source.message
+        : typeof source === "string"
+        ? source
+        : source != null
+        ? String(source)
+        : "";
+    if (sourceText.trim().length > 0) {
+      parts.push(sourceText.trim());
+    }
+
+    const stderrText = this.recentStderrLines.join("\n").trim();
+    if (stderrText.length > 0) {
+      parts.push(stderrText);
+    }
+
+    return parts.join("\n");
+  }
+
+  private createSetupDiagnostic(source?: unknown): CodexSetupDiagnostic | null {
+    const raw = this.getDiagnosticContext(source);
+    if (!raw) return null;
+
+    const normalized = raw.toLowerCase();
+    const commandName = CONFIG.CODEX_COMMAND.toLowerCase();
+    const mentionsCommand = normalized.includes(commandName);
+
+    if (
+      normalized.includes(`spawn ${commandName} enoent`) ||
+      normalized.includes(`spawnsync ${commandName} enoent`) ||
+      (mentionsCommand && normalized.includes("enoent")) ||
+      normalized.includes(`failed to run ${commandName} --version`)
+    ) {
+      return {
+        issue: "cli-unavailable",
+        severity: "error",
+        message: `Codex CLI를 실행할 수 없습니다. 터미널에서 \`${CONFIG.CODEX_COMMAND} --version\`이 동작하는지 확인하고 설치 후 VS Code를 다시 시작하세요.`,
+      };
+    }
+
+    const authPatterns = [
+      /\bnot logged in\b/i,
+      /\blogin required\b/i,
+      /\bplease log(?:\s|-)?in\b/i,
+      /\bcodex auth login\b/i,
+      /\bauthentication\b/i,
+      /\bunauthorized\b/i,
+      /\b401\b/i,
+      /\bsign in\b/i,
+      /\bauth required\b/i,
+    ];
+    if (authPatterns.some((pattern) => pattern.test(raw))) {
+      return {
+        issue: "auth-required",
+        severity: "warning",
+        message: `Codex CLI 로그인이 필요합니다. 터미널에서 \`${CONFIG.CODEX_COMMAND} auth login\`을 실행한 뒤 다시 시도하세요.`,
+      };
+    }
+
+    if (
+      normalized.includes("json-rpc timeout: initialize") ||
+      normalized.includes("codex process closed") ||
+      normalized.includes("failed to obtain threadid from codex app-server")
+    ) {
+      return {
+        issue: "startup-failed",
+        severity: "warning",
+        message:
+          "Codex app-server를 시작하지 못했습니다. Codex CLI 설치 또는 로그인 상태를 확인한 뒤 다시 시도하세요.",
+      };
+    }
+
+    return null;
+  }
+
+  private notifySetupDiagnostic(source?: unknown): void {
+    const diagnostic = this.createSetupDiagnostic(source);
+    if (!diagnostic) return;
+
+    this.setCodexCliStatus(
+      diagnostic.issue,
+      diagnostic.severity,
+      diagnostic.message
+    );
+    if (this.shownSetupDiagnostics.has(diagnostic.issue)) return;
+
+    this.shownSetupDiagnostics.add(diagnostic.issue);
+    const actionLabel = "출력 보기";
+    const message = `Codex Remote: ${diagnostic.message}`;
+    const showMessage =
+      diagnostic.severity === "error"
+        ? vscode.window.showErrorMessage
+        : vscode.window.showWarningMessage;
+
+    void showMessage(message, actionLabel).then((selected) => {
+      if (selected === actionLabel) {
+        this.outputChannel?.show(true);
+      }
+    });
+  }
+
+  private ensureCodexCommandAvailable(): void {
+    if (this.hasConfirmedCodexCommand) {
+      return;
+    }
+
+    const cwd = this.workspaceRoot || process.cwd();
+    const probe = child_process.spawnSync(CONFIG.CODEX_COMMAND, ["--version"], {
+      cwd,
+      shell: false,
+      env: {
+        ...process.env,
+      },
+      encoding: "utf8",
+      timeout: 5000,
+    });
+
+    if (probe.error) {
+      this.notifySetupDiagnostic(
+        `Failed to run ${CONFIG.CODEX_COMMAND} --version: ${probe.error.message}`
+      );
+      throw probe.error;
+    }
+
+    if ((probe.status ?? 1) !== 0) {
+      const details = [probe.stdout, probe.stderr]
+        .filter((value): value is string => typeof value === "string")
+        .join("\n")
+        .trim();
+      const failureMessage = details
+        ? `Failed to run ${CONFIG.CODEX_COMMAND} --version: ${details}`
+        : `Failed to run ${CONFIG.CODEX_COMMAND} --version`;
+      this.notifySetupDiagnostic(failureMessage);
+      throw new Error(failureMessage);
+    }
+
+    this.hasConfirmedCodexCommand = true;
+    this.shownSetupDiagnostics.delete("cli-unavailable");
+    if (this.codexCliStatus.state !== "ready") {
+      this.setCodexCliStatus(
+        "cli-available",
+        "info",
+        `Codex CLI 실행 가능 (\`${CONFIG.CODEX_COMMAND} --version\` 확인됨)`
+      );
+    }
+  }
+
+  notifyIfCodexCliUnavailable(): void {
+    try {
+      this.ensureCodexCommandAvailable();
+    } catch (error) {
+      this.notifySetupDiagnostic(error);
+    }
+  }
+
+  refreshCodexCliStatus(): void {
+    this.hasConfirmedCodexCommand = false;
+    try {
+      this.ensureCodexCommandAvailable();
+    } catch (error) {
+      this.notifySetupDiagnostic(error);
+    }
+  }
+
+  setOnCodexCliStatusChange(callback: (() => void) | null): void {
+    this.onCodexCliStatusChange = callback;
+  }
+
+  getCodexCliStatus(): CodexCliStatus {
+    return { ...this.codexCliStatus };
+  }
+
+  private getClientKey(clientId?: string): string {
+    return clientId || "global";
+  }
+
+  private safeString(value: unknown): string {
+    if (typeof value === "string") {
+      return value;
+    }
+    if (typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+    return "";
+  }
+
+  private asObject(value: unknown): Record<string, unknown> | null {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return value as Record<string, unknown>;
+    }
+    return null;
+  }
+
+  private getNested(
+    value: Record<string, unknown>,
+    ...keys: string[]
+  ): unknown | null {
+    let current: unknown = value;
+    for (const key of keys) {
+      const currentObject = this.asObject(current);
+      if (!currentObject) return null;
+      current = currentObject[key];
+      if (current === undefined || current === null) return null;
+    }
+    return current;
+  }
+
+  private extractText(
+    value: unknown,
+    depth: number = 0,
+    preserveWhitespace: boolean = false
+  ): string {
+    if (depth > 6 || value === null || value === undefined) return "";
+
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean")
+      return String(value);
+
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => this.extractText(item, depth + 1, preserveWhitespace))
+        .join("");
+    }
+
+    const objectValue = this.asObject(value);
+    if (!objectValue) return "";
+
+    const prioritizedKeys = [
+      "delta",
+      "text",
+      "content",
+      "message",
+      "result",
+      "outputText",
+      "finalText",
+      "value",
+      "items",
+      "item",
+    ];
+    for (const key of prioritizedKeys) {
+      if (key in objectValue) {
+        const nestedText = this.extractText(
+          objectValue[key],
+          depth + 1,
+          preserveWhitespace
+        );
+        if (
+          preserveWhitespace ? nestedText.length > 0 : nestedText.trim().length > 0
+        ) {
+          return nestedText;
+        }
+      }
+    }
+
+    return "";
+  }
+
+  private extractCompletionText(value: unknown, depth: number = 0): string {
+    if (depth > 6 || value === null || value === undefined) return "";
+
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean")
+      return String(value);
+
+    if (Array.isArray(value)) {
+      return value.map((item) => this.extractCompletionText(item, depth + 1)).join("");
+    }
+
+    const objectValue = this.asObject(value);
+    if (!objectValue) return "";
+
+    // 완료 텍스트 추출 시에는 delta/text 조각보다 최종 결과 키를 우선한다.
+    const prioritizedKeys = [
+      "outputText",
+      "finalText",
+      "result",
+      "content",
+      "message",
+      "value",
+      "items",
+      "item",
+      "text",
+      "delta",
+    ];
+    for (const key of prioritizedKeys) {
+      if (key in objectValue) {
+        const nestedText = this.extractCompletionText(objectValue[key], depth + 1);
+        if (nestedText.trim().length > 0) {
+          return nestedText;
+        }
+      }
+    }
+
+    return "";
+  }
+
+  private extractThreadId(params: unknown): string | null {
+    const objectParams = this.asObject(params);
+    if (!objectParams) return null;
+
+    const directCandidates = [
+      objectParams.threadId,
+      objectParams.thread_id,
+      this.getNested(objectParams, "thread", "id"),
+      this.getNested(objectParams, "turn", "threadId"),
+      this.getNested(objectParams, "turn", "thread_id"),
+      this.getNested(objectParams, "item", "threadId"),
+      this.getNested(objectParams, "item", "thread_id"),
+    ];
+
+    for (const candidate of directCandidates) {
+      const parsed = this.safeString(candidate).trim();
+      if (parsed) return parsed;
+    }
+    return null;
+  }
+
+  private extractTurnId(params: unknown): string | null {
+    const objectParams = this.asObject(params);
+    if (!objectParams) return null;
+
+    const candidates = [
+      objectParams.turnId,
+      objectParams.turn_id,
+      this.getNested(objectParams, "turn", "id"),
+      this.getNested(objectParams, "item", "turnId"),
+      this.getNested(objectParams, "item", "turn_id"),
+    ];
+
+    for (const candidate of candidates) {
+      const parsed = this.safeString(candidate).trim();
+      if (parsed) return parsed;
+    }
+    return null;
+  }
+
+  private extractDeltaText(params: unknown): string {
+    const objectParams = this.asObject(params);
+    if (!objectParams) return "";
+
+    const candidates: unknown[] = [
+      objectParams.delta,
+      objectParams.text,
+      objectParams.chunk,
+      this.getNested(objectParams, "item", "delta"),
+      this.getNested(objectParams, "item", "text"),
+      this.getNested(objectParams, "agentMessage", "delta"),
+      this.getNested(objectParams, "agentMessage", "text"),
+      this.getNested(objectParams, "data", "delta"),
+      this.getNested(objectParams, "data", "text"),
+    ];
+
+    for (const candidate of candidates) {
+      const text = this.extractText(candidate, 0, true);
+      if (text.length > 0) {
+        return text;
+      }
+    }
+    return this.extractText(params, 0, true);
+  }
+
+  private extractCompletedText(params: unknown): string {
+    const objectParams = this.asObject(params);
+    if (!objectParams) return "";
+
+    const candidates: unknown[] = [
+      objectParams.outputText,
+      objectParams.finalText,
+      objectParams.result,
+      objectParams.text,
+      this.getNested(objectParams, "turn", "result"),
+      this.getNested(objectParams, "turn", "outputText"),
+      this.getNested(objectParams, "turn", "finalText"),
+      this.getNested(objectParams, "data", "result"),
+      this.getNested(objectParams, "data", "outputText"),
+    ];
+
+    for (const candidate of candidates) {
+      const text = this.extractCompletionText(candidate, 0);
+      if (text.length > 0) return text;
+    }
+
+    return this.extractCompletionText(params, 0);
+  }
+
+  private extractErrorMessage(params: unknown): string {
+    const objectParams = this.asObject(params);
+    if (!objectParams) return "Unknown Codex error";
+
+    const candidates = [
+      objectParams.error,
+      objectParams.message,
+      this.getNested(objectParams, "error", "message"),
+      this.getNested(objectParams, "data", "error"),
+      this.getNested(objectParams, "data", "message"),
+    ];
+
+    for (const candidate of candidates) {
+      const message = this.extractText(candidate).trim();
+      if (message.length > 0) return message;
+    }
+
+    return "Unknown Codex error";
+  }
+
+  private resolveClientIdFromParams(params: unknown): string | null {
+    const turnId = this.extractTurnId(params);
+    if (turnId && this.turnToClient.has(turnId)) {
+      return this.turnToClient.get(turnId) || null;
+    }
+
+    const threadId = this.extractThreadId(params);
+    if (threadId && this.threadToClient.has(threadId)) {
+      return this.threadToClient.get(threadId) || null;
+    }
+
+    if (this.clientTurnStates.size === 1) {
+      return Array.from(this.clientTurnStates.keys())[0] || null;
+    }
+
+    // 이벤트에 turn/thread 정보가 없거나 매핑이 누락된 경우,
+    // 가장 최근 turn 상태를 보수적으로 사용해 응답 누락을 줄인다.
+    if (this.clientTurnStates.size > 1) {
+      const keys = Array.from(this.clientTurnStates.keys());
+      const fallback = keys[keys.length - 1] || null;
+      if (fallback) {
+        this.log(
+          `[CODEX] resolveClientId fallback -> ${fallback} (states=${this.clientTurnStates.size})`
+        );
+      }
+      return fallback;
+    }
+
+    return null;
+  }
+
+  private methodKey(method: string): string {
+    return method.toLowerCase().replace(/[^a-z]/g, "");
+  }
+
+  private makeJsonRpcError(method: string, error: JsonRpcErrorShape): Error {
+    const message = error?.message || "Unknown JSON-RPC error";
+    return new Error(`${method} failed (${error?.code ?? "unknown"}): ${message}`);
+  }
+
+  private setupProcessStreams(
+    process: child_process.ChildProcessWithoutNullStreams
+  ): void {
+    this.stdoutReader = readline.createInterface({ input: process.stdout });
+    this.stderrReader = readline.createInterface({ input: process.stderr });
+
+    this.stdoutReader.on("line", (line) => this.handleStdoutLine(line));
+    this.stderrReader.on("line", (line) => {
+      if (line.trim().length > 0) {
+        this.rememberStderrLine(line);
+        this.logError(`codex stderr: ${line}`);
+        this.notifySetupDiagnostic(line);
+      }
+    });
+
+    process.on("error", (error) => {
+      this.logError("Codex process error", error);
+      this.notifySetupDiagnostic(error);
+      this.handleProcessExit(`Codex process error: ${error.message}`);
+    });
+
+    process.on("close", (code, signal) => {
+      const reason = `Codex process closed (code=${code ?? "null"}, signal=${
+        signal || "none"
+      })`;
+      this.log(reason);
+      if (!this.initialized && (code ?? 0) !== 0) {
+        this.notifySetupDiagnostic(reason);
+      }
+      this.handleProcessExit(reason);
+    });
+  }
+
+  private handleProcessExit(reason: string): void {
+    this.initialized = false;
+    this.initPromise = null;
+
+    if (this.stdoutReader) {
+      this.stdoutReader.removeAllListeners();
+      this.stdoutReader.close();
+      this.stdoutReader = null;
+    }
+    if (this.stderrReader) {
+      this.stderrReader.removeAllListeners();
+      this.stderrReader.close();
+      this.stderrReader = null;
+    }
+
+    if (this.codexProcess) {
+      this.codexProcess.removeAllListeners();
+      this.codexProcess = null;
+    }
+
+    const pendingEntries = Array.from(this.pendingRequests.entries());
+    this.pendingRequests.clear();
+    for (const [, pending] of pendingEntries) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error(reason));
+    }
+
+    if (this.wsServer) {
+      for (const [clientId, state] of this.clientTurnStates.entries()) {
+        this.wsServer.send(
+          JSON.stringify({
+            type: "error",
+            message: `Codex turn interrupted: ${reason}`,
+            timestamp: new Date().toISOString(),
+            source: "codex",
+            clientId,
+            sessionId: state.threadId,
+            targetDeviceId: state.senderDeviceId || undefined,
+          })
+        );
+      }
+    }
+
+    this.clientTurnStates.clear();
+    this.turnToClient.clear();
+    this.clientThreads.clear();
+    this.threadToClient.clear();
+    this.pendingHistoryByClient.clear();
+  }
+
+  private writeJsonRpcMessage(payload: Record<string, unknown>): void {
+    if (!this.codexProcess || !this.codexProcess.stdin.writable) {
+      throw new Error("Codex app-server stdin is not writable");
+    }
+    this.codexProcess.stdin.write(`${JSON.stringify(payload)}\n`);
+  }
+
+  private async sendRpcRequestRaw(
+    method: string,
+    params?: Record<string, unknown>,
+    timeoutMs: number = 20000
+  ): Promise<unknown> {
+    if (!this.codexProcess) {
+      throw new Error("Codex app-server process is not running");
+    }
+
+    const id = this.nextRequestId++;
+    const requestPayload: Record<string, unknown> = {
+      jsonrpc: "2.0",
+      id,
+      method,
+    };
+    if (params !== undefined) {
+      requestPayload.params = params;
+    }
+
+    return new Promise<unknown>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        reject(new Error(`JSON-RPC timeout: ${method}`));
+      }, timeoutMs);
+
+      this.pendingRequests.set(id, { method, resolve, reject, timeout });
+
+      try {
+        this.writeJsonRpcMessage(requestPayload);
+      } catch (error) {
+        clearTimeout(timeout);
+        this.pendingRequests.delete(id);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+
+  private async sendRpcRequest(
+    method: string,
+    params?: Record<string, unknown>,
+    timeoutMs: number = 20000
+  ): Promise<unknown> {
+    await this.ensureServerReady();
+    return this.sendRpcRequestRaw(method, params, timeoutMs);
+  }
+
+  private sendRpcNotification(
+    method: string,
+    params?: Record<string, unknown>
+  ): void {
+    if (!this.codexProcess) {
+      throw new Error("Codex app-server process is not running");
+    }
+    const payload: Record<string, unknown> = {
+      jsonrpc: "2.0",
+      method,
+    };
+    if (params !== undefined) {
+      payload.params = params;
+    }
+    this.writeJsonRpcMessage(payload);
+  }
+
+  private handleStdoutLine(line: string): void {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    } catch (error) {
+      this.logError(`Failed to parse codex JSONL line`, error);
+      return;
+    }
+
+    if ("id" in parsed) {
+      this.handleRpcResponse(parsed);
+      return;
+    }
+
+    const method = this.safeString(parsed.method).trim();
+    const params = parsed.params;
+
+    if (!method) return;
+    this.handleRpcNotification(method, params);
+  }
+
+  private handleRpcResponse(response: Record<string, unknown>): void {
+    const rawId = response.id;
+    const id =
+      typeof rawId === "number"
+        ? rawId
+        : typeof rawId === "string"
+        ? Number(rawId)
+        : NaN;
+    if (!Number.isFinite(id)) return;
+
+    const pending = this.pendingRequests.get(id);
+    if (!pending) return;
+
+    clearTimeout(pending.timeout);
+    this.pendingRequests.delete(id);
+
+    if (response.error) {
+      const errorObject = this.asObject(response.error) || {};
+      pending.reject(this.makeJsonRpcError(pending.method, errorObject));
+      return;
+    }
+
+    pending.resolve(response.result);
+  }
+
+  private handleRpcNotification(method: string, params: unknown): void {
+    const normalized = method.toLowerCase();
+    const key = this.methodKey(method);
+
+    const isAgentDelta =
+      normalized === "item/agentmessage/delta" ||
+      normalized.endsWith("/item/agentmessage/delta") ||
+      key.includes("itemagentmessagedelta") ||
+      key.includes("agentmessagedelta");
+
+    if (isAgentDelta) {
+      this.handleAgentDelta(params);
+      return;
+    }
+
+    const isTurnCompleted =
+      normalized === "turn/completed" ||
+      normalized.endsWith("/turn/completed") ||
+      key.includes("turncompleted");
+
+    if (isTurnCompleted) {
+      this.handleTurnCompleted(params);
+      return;
+    }
+
+    const isTurnStarted =
+      normalized === "turn/started" ||
+      normalized.endsWith("/turn/started") ||
+      key.includes("turnstarted");
+
+    if (isTurnStarted) {
+      this.handleTurnStarted(params);
+      return;
+    }
+
+    const isTurnFailed =
+      normalized === "turn/failed" ||
+      normalized.endsWith("/turn/failed") ||
+      key.includes("turnfailed");
+
+    if (isTurnFailed) {
+      this.handleTurnFailed(params);
+      return;
+    }
+
+    if (normalized === "error" || normalized.endsWith("/error")) {
+      this.handleGenericError(params);
+      return;
+    }
+
+    if (key.includes("turn") || key.includes("agent") || key.includes("error")) {
+      this.log(
+        `[CODEX] ignored rpc notification method=${method}, params=${JSON.stringify(
+          params
+        ).substring(0, 300)}`
+      );
+    }
+  }
+
+  private handleAgentDelta(params: unknown): void {
+    const clientId = this.resolveClientIdFromParams(params);
+    if (!clientId) return;
+
+    const state = this.clientTurnStates.get(clientId);
+    if (!state || !this.wsServer) return;
+
+    const delta = this.extractDeltaText(params);
+    if (!delta) return;
+
+    state.accumulatedText += delta;
+    state.hasChunks = true;
+    this.clientTurnStates.set(clientId, state);
+
+    this.wsServer.send(
+      JSON.stringify({
+        type: "chat_response_chunk",
+        text: delta,
+        fullText: state.accumulatedText,
+        isReplace: false,
+        timestamp: new Date().toISOString(),
+        source: "codex",
+        sessionId: state.threadId,
+        clientId,
+        targetDeviceId: state.senderDeviceId || undefined,
+      })
+    );
+  }
+
+  private handleTurnCompleted(params: unknown): void {
+    const clientId = this.resolveClientIdFromParams(params);
+    if (!clientId) return;
+
+    const state = this.clientTurnStates.get(clientId);
+    if (!state || !this.wsServer) return;
+
+    const completedText = this.extractCompletedText(params).trim();
+
+    if (!completedText) {
+      this.log(
+        `[CODEX] turn/completed extracted empty text; raw=${JSON.stringify(params).substring(
+          0,
+          500
+        )}`
+      );
+    } else {
+      this.log(
+        `[CODEX] turn/completed extracted text length=${completedText.length}`
+      );
+    }
+
+    if (completedText && completedText !== state.accumulatedText) {
+      state.accumulatedText = completedText;
+      if (state.hasChunks) {
+        this.wsServer.send(
+          JSON.stringify({
+            type: "chat_response_chunk",
+            text: completedText,
+            fullText: completedText,
+            isReplace: true,
+            timestamp: new Date().toISOString(),
+            source: "codex",
+            sessionId: state.threadId,
+            clientId,
+            targetDeviceId: state.senderDeviceId || undefined,
+          })
+        );
+      }
+    }
+
+    const finalText = (state.accumulatedText || completedText || "").trim();
+
+    if (finalText) {
+      this.log(`[CODEX] forwarding final chat_response length=${finalText.length}`);
+    } else {
+      this.log(
+        `[CODEX] final chat_response empty; accumulatedLen=${state.accumulatedText.length}`
+      );
+    }
+
+    if (finalText) {
+      this.wsServer.send(
+        JSON.stringify({
+          type: "chat_response",
+          text: finalText,
+          timestamp: new Date().toISOString(),
+          source: "codex",
+          sessionId: state.threadId,
+          clientId,
+          targetDeviceId: state.senderDeviceId || undefined,
+        })
+      );
+    }
+
+    if (state.hasChunks) {
+      this.wsServer.send(
+        JSON.stringify({
+          type: "chat_response_complete",
+          timestamp: new Date().toISOString(),
+          source: "codex",
+          sessionId: state.threadId,
+          clientId,
+          targetDeviceId: state.senderDeviceId || undefined,
+        })
+      );
+    }
+
+    this.saveAssistantResponse(clientId, finalText);
+    this.clearTurnState(clientId);
+  }
+
+  private handleTurnFailed(params: unknown): void {
+    const clientId = this.resolveClientIdFromParams(params);
+    if (!clientId) return;
+
+    const state = this.clientTurnStates.get(clientId);
+    if (!state || !this.wsServer) return;
+
+    const errorMessage = this.extractErrorMessage(params);
+    this.wsServer.send(
+      JSON.stringify({
+        type: "error",
+        message: `Codex turn failed: ${errorMessage}`,
+        timestamp: new Date().toISOString(),
+        source: "codex",
+        sessionId: state.threadId,
+        clientId,
+        targetDeviceId: state.senderDeviceId || undefined,
+      })
+    );
+    this.clearTurnState(clientId);
+  }
+
+  private handleTurnStarted(params: unknown): void {
+    const clientId = this.resolveClientIdFromParams(params);
+    if (!clientId) return;
+    const state = this.clientTurnStates.get(clientId);
+    if (!state) return;
+
+    const turnId = this.extractTurnId(params);
+    if (!turnId) return;
+
+    state.turnId = turnId;
+    this.clientTurnStates.set(clientId, state);
+    this.turnToClient.set(turnId, clientId);
+  }
+
+  private handleGenericError(params: unknown): void {
+    const clientId = this.resolveClientIdFromParams(params);
+    if (!clientId || !this.wsServer) return;
+    const state = this.clientTurnStates.get(clientId);
+    if (!state) return;
+
+    const errorMessage = this.extractErrorMessage(params);
+    this.wsServer.send(
+      JSON.stringify({
+        type: "error",
+        message: `Codex error: ${errorMessage}`,
+        timestamp: new Date().toISOString(),
+        source: "codex",
+        sessionId: state.threadId,
+        clientId,
+        targetDeviceId: state.senderDeviceId || undefined,
+      })
+    );
+  }
+
+  private clearTurnState(clientId: string): void {
+    const state = this.clientTurnStates.get(clientId);
+    if (state?.turnId) {
+      this.turnToClient.delete(state.turnId);
+    }
+    this.clientTurnStates.delete(clientId);
+  }
+
+  private async startProcessAndInitialize(): Promise<void> {
+    const cwd = this.workspaceRoot || process.cwd();
+    const command = CONFIG.CODEX_COMMAND;
+    const args = CONFIG.CODEX_APP_SERVER_ARGS.length
+      ? CONFIG.CODEX_APP_SERVER_ARGS
+      : ["app-server"];
+    this.recentStderrLines = [];
+    this.ensureCodexCommandAvailable();
+
+    this.log(
+      `Starting Codex app-server: ${command} ${args.join(" ")} (cwd=${cwd})`,
+      true
+    );
+
+    const spawned = child_process.spawn(command, args, {
+      cwd,
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: false,
+      env: {
+        ...process.env,
+      },
+    });
+
+    this.codexProcess = spawned;
+    this.setupProcessStreams(spawned);
+
+    const initializeResult = await this.sendRpcRequestRaw(
+      "initialize",
+      {
+        clientInfo: {
+          name: "codex-remote-extension",
+          version: "0.4.5",
+        },
+        capabilities: {},
+      },
+      15000
+    );
+    this.log(
+      `Codex initialize response: ${JSON.stringify(initializeResult).substring(
+        0,
+        300
+      )}`
+    );
+
+    this.sendRpcNotification("initialized", {});
+    this.initialized = true;
+    this.shownSetupDiagnostics.delete("auth-required");
+    this.shownSetupDiagnostics.delete("startup-failed");
+    this.setCodexCliStatus(
+      "ready",
+      "info",
+      "Codex CLI 및 app-server 준비됨"
+    );
+    this.log("Codex app-server initialize/initialized handshake completed", true);
+  }
+
+  private async ensureServerReady(): Promise<void> {
+    if (this.codexProcess && this.initialized) {
+      return;
+    }
+
+    if (this.initPromise) {
+      await this.initPromise;
+      return;
+    }
+
+    this.initPromise = this.startProcessAndInitialize();
+    try {
+      await this.initPromise;
+    } catch (error) {
+      this.notifySetupDiagnostic(error);
+      throw error;
+    } finally {
+      this.initPromise = null;
+    }
+  }
+
+  private async ensureThread(clientId: string, newSession: boolean): Promise<string> {
+    if (!newSession) {
+      const existing = this.clientThreads.get(clientId);
+      if (existing) {
+        try {
+          await this.sendRpcRequest("thread/resume", { threadId: existing }, 8000);
+        } catch {
+          // resume 실패해도 동일 프로세스에서는 threadId 저장값으로 turn/start 시도 가능
+        }
+        this.threadToClient.set(existing, clientId);
+        return existing;
+      }
+    }
+
+    let threadResult: unknown;
+    try {
+      threadResult = await this.sendRpcRequest("thread/start", {}, 15000);
+    } catch (error) {
+      // 하위/변형 서버 호환
+      threadResult = await this.sendRpcRequest("thread/create", {}, 15000);
+    }
+
+    const threadObj = this.asObject(threadResult) || {};
+    const threadIdCandidates = [
+      threadObj.threadId,
+      threadObj.thread_id,
+      this.getNested(threadObj, "thread", "id"),
+      threadObj.id,
+    ];
+    const threadId =
+      threadIdCandidates
+        .map((value) => this.safeString(value).trim())
+        .find((value) => value.length > 0) || "";
+
+    if (!threadId) {
+      throw new Error("Failed to obtain threadId from Codex app-server");
+    }
+
+    this.clientThreads.set(clientId, threadId);
+    this.threadToClient.set(threadId, clientId);
+    return threadId;
+  }
+
+  private async startTurn(
+    threadId: string,
+    text: string,
+    selectedMode: string
+  ): Promise<{ turnId: string | null; immediateText: string }> {
+    const candidateParams: Record<string, unknown>[] = [
+      {
+        threadId,
+        input: [{ type: "text", text }],
+        summary: "auto",
+      },
+      {
+        threadId,
+        input: [{ type: "text", text }],
+        personality: "default",
+      },
+      {
+        threadId,
+        input: [{ type: "text", text }],
+        effort: selectedMode === "plan" ? "high" : "medium",
+      },
+      {
+        threadId,
+        input: [{ type: "text", text }],
+      },
+    ];
+
+    let lastError: unknown = null;
+    for (const params of candidateParams) {
+      try {
+        const result = await this.sendRpcRequest("turn/start", params, 20000);
+        const resultObject = this.asObject(result) || {};
+        const turnIdCandidates = [
+          resultObject.turnId,
+          resultObject.turn_id,
+          this.getNested(resultObject, "turn", "id"),
+          resultObject.id,
+        ];
+        const turnId =
+          turnIdCandidates
+            .map((value) => this.safeString(value).trim())
+            .find((value) => value.length > 0) || null;
+
+        // turn/start 응답은 최종 답변이 아닌 메타데이터를 포함할 수 있으므로
+        // 즉시 응답 채택은 명시적인 완료 텍스트 필드에서만 허용한다.
+        const immediateTextCandidates = [
+          resultObject.outputText,
+          resultObject.finalText,
+          resultObject.result,
+          this.getNested(resultObject, "turn", "outputText"),
+          this.getNested(resultObject, "turn", "finalText"),
+          this.getNested(resultObject, "turn", "result"),
+        ];
+        const immediateText =
+          immediateTextCandidates
+            .map((value) => this.extractCompletionText(value, 0).trim())
+            .find((value) => value.length > 0) || "";
+
+        if (immediateText) {
+          this.log(
+            `[CODEX] turn/start immediateText accepted (len=${immediateText.length})`
+          );
+        }
+        return { turnId, immediateText };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("turn/start failed");
+  }
+
+  private detectAgentMode(
+    text: string
+  ): "agent" | "ask" | "plan" | "debug" | null {
+    const normalized = text.toLowerCase();
+    if (
+      normalized.includes("debug") ||
+      normalized.includes("버그") ||
+      normalized.includes("오류")
+    ) {
+      return "debug";
+    }
+    if (
+      normalized.includes("plan") ||
+      normalized.includes("계획") ||
+      normalized.includes("설계")
+    ) {
+      return "plan";
+    }
+    if (
+      normalized.includes("why") ||
+      normalized.includes("무엇") ||
+      normalized.includes("질문") ||
+      normalized.includes("?")
+    ) {
+      return "ask";
+    }
+    return "agent";
+  }
+
+  private getModeDisplayName(mode: string): string {
+    const displayNames: Record<string, string> = {
+      agent: "Agent (코딩 작업)",
+      ask: "Ask (질문/학습)",
+      plan: "Plan (계획/설계)",
+      debug: "Debug (문제 해결)",
+      auto: "Auto (자동 선택)",
+    };
+    return displayNames[mode] || mode;
+  }
+
+  private saveUserMessage(
+    clientId: string,
+    sessionId: string,
+    text: string,
+    agentMode: string
+  ): void {
+    const entry: CodexChatHistoryEntry = {
+      id: `codex-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+      sessionId,
+      clientId,
+      userMessage: text,
+      assistantResponse: "",
+      timestamp: new Date().toISOString(),
+      agentMode,
+      provider: "codex",
+    };
+    this.chatHistory.push(entry);
+    this.pendingHistoryByClient.set(clientId, entry.id);
+  }
+
+  private saveAssistantResponse(clientId: string, responseText: string): void {
+    if (!responseText) return;
+    const pendingId = this.pendingHistoryByClient.get(clientId);
+    if (!pendingId) return;
+
+    const entry = this.chatHistory.find((item) => item.id === pendingId);
+    if (!entry) return;
+    entry.assistantResponse = responseText;
+    this.pendingHistoryByClient.delete(clientId);
+  }
+
+  async sendPrompt(
+    text: string,
+    execute: boolean = true,
+    clientId?: string,
+    newSession: boolean = false,
+    agentMode: CodexAgentMode = "auto",
+    senderDeviceId?: string
+  ): Promise<void> {
+    const effectiveClientId = this.getClientKey(clientId);
+    if (!execute) {
+      this.log(
+        "Codex provider does not support non-execute mode. Executing anyway."
+      );
+    }
+
+    let selectedMode: string = "agent";
+    if (agentMode && agentMode !== "auto") {
+      selectedMode = agentMode;
+    } else if (agentMode === "auto") {
+      selectedMode = this.detectAgentMode(text) || "agent";
+    }
+
+    await this.ensureServerReady();
+    const threadId = await this.ensureThread(effectiveClientId, newSession);
+
+    if (agentMode === "auto" && this.wsServer) {
+      this.wsServer.send(
+        JSON.stringify({
+          type: "agent_mode_selected",
+          requestedMode: "auto",
+          actualMode: selectedMode,
+          displayName: this.getModeDisplayName(selectedMode),
+          timestamp: new Date().toISOString(),
+        })
+      );
+    }
+
+    const existingState = this.clientTurnStates.get(effectiveClientId);
+    if (existingState?.turnId) {
+      this.turnToClient.delete(existingState.turnId);
+    }
+
+    this.clientTurnStates.set(effectiveClientId, {
+      threadId,
+      turnId: null,
+      accumulatedText: "",
+      hasChunks: false,
+      senderDeviceId: senderDeviceId || null,
+    });
+    this.threadToClient.set(threadId, effectiveClientId);
+    this.saveUserMessage(effectiveClientId, threadId, text, selectedMode);
+
+    let turnStartResult: { turnId: string | null; immediateText: string };
+    try {
+      turnStartResult = await this.startTurn(threadId, text, selectedMode);
+    } catch (error) {
+      // 저장된 threadId가 만료/손상된 경우 새 thread로 1회 재시도
+      this.logError(
+        `turn/start failed for thread ${threadId}, retrying with a new thread`,
+        error
+      );
+      const retryThreadId = await this.ensureThread(effectiveClientId, true);
+      const retryState = this.clientTurnStates.get(effectiveClientId);
+      if (retryState) {
+        retryState.threadId = retryThreadId;
+        this.clientTurnStates.set(effectiveClientId, retryState);
+      }
+      turnStartResult = await this.startTurn(retryThreadId, text, selectedMode);
+    }
+
+    const state = this.clientTurnStates.get(effectiveClientId);
+    if (!state) {
+      return;
+    }
+
+    if (turnStartResult.turnId) {
+      state.turnId = turnStartResult.turnId;
+      this.turnToClient.set(turnStartResult.turnId, effectiveClientId);
+      this.clientTurnStates.set(effectiveClientId, state);
+    }
+
+    if (turnStartResult.immediateText) {
+      if (this.wsServer) {
+        this.wsServer.send(
+          JSON.stringify({
+            type: "chat_response",
+            text: turnStartResult.immediateText,
+            timestamp: new Date().toISOString(),
+            source: "codex",
+            sessionId: threadId,
+            clientId: effectiveClientId,
+            targetDeviceId: senderDeviceId || undefined,
+          })
+        );
+      }
+      this.saveAssistantResponse(effectiveClientId, turnStartResult.immediateText);
+      this.clearTurnState(effectiveClientId);
+    }
+  }
+
+  async stopPrompt(): Promise<{ success: boolean }> {
+    try {
+      const entries = Array.from(this.clientTurnStates.entries());
+      for (const [, state] of entries) {
+        if (state.turnId) {
+          try {
+            await this.sendRpcRequest("turn/cancel", { turnId: state.turnId }, 5000);
+          } catch {
+            // 서버가 turn/cancel 미지원일 수 있으므로 무시
+          }
+        }
+      }
+      this.clientTurnStates.clear();
+      this.turnToClient.clear();
+      return { success: true };
+    } catch (error) {
+      this.logError("Failed to stop Codex turn", error);
+      return { success: false };
+    }
+  }
+
+  getSessionInfo(clientId?: string): {
+    clientId: string | null;
+    currentSessionId: string | null;
+    hasSession: boolean;
+    provider: "codex";
+  } {
+    const key = this.getClientKey(clientId);
+    const sessionId = this.clientThreads.get(key) || null;
+    return {
+      clientId: clientId || null,
+      currentSessionId: sessionId,
+      hasSession: !!sessionId,
+      provider: "codex",
+    };
+  }
+
+  getChatHistory(
+    clientId?: string,
+    sessionId?: string,
+    _relaySessionId?: string,
+    limit: number = 50
+  ): CodexChatHistoryEntry[] {
+    let filtered = [...this.chatHistory];
+
+    if (clientId) {
+      const key = this.getClientKey(clientId);
+      filtered = filtered.filter((entry) => entry.clientId === key);
+    }
+    if (sessionId) {
+      filtered = filtered.filter((entry) => entry.sessionId === sessionId);
+    }
+
+    return filtered.slice(-limit);
+  }
+
+  hasClientSession(clientId?: string): boolean {
+    const key = this.getClientKey(clientId);
+    return this.clientThreads.has(key);
+  }
+
+  dispose(): void {
+    if (this.codexProcess) {
+      try {
+        this.codexProcess.kill("SIGTERM");
+      } catch {
+        // ignore
+      }
+    }
+    this.handleProcessExit("Codex handler disposed");
+  }
+}

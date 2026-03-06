@@ -1,0 +1,101 @@
+{
+  "name": "codex-remote-extension",
+  "displayName": "Codex Remote",
+  "description": "Remote control Codex from your mobile device via WebSocket or Relay Server",
+  "version": "0.4.5",
+  "publisher": "jaloveeye",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/codex-remote.git"
+  },
+  "homepage": "https://github.com/your-org/codex-remote",
+  "bugs": {
+    "url": "https://github.com/your-org/codex-remote/issues"
+  },
+  "icon": "icon.png",
+  "keywords": [
+    "codex",
+    "remote",
+    "mobile",
+    "websocket",
+    "relay",
+    "session",
+    "agent"
+  ],
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codexRemote.start",
+        "title": "Start Codex Remote Server"
+      },
+      {
+        "command": "codexRemote.stop",
+        "title": "Stop Codex Remote Server"
+      },
+      {
+        "command": "codexRemote.toggle",
+        "title": "Toggle Codex Remote Server"
+      },
+      {
+        "command": "codexRemote.showConnections",
+        "title": "Codex Remote: 연결 정보 보기"
+      },
+      {
+        "command": "codexRemote.statusBarClick",
+        "title": "Codex Remote: 릴레이 연결 (상태줄 클릭 시)"
+      },
+      {
+        "command": "codexRemote.checkRelayServer",
+        "title": "Codex Remote: 릴레이 서버 상태 확인"
+      },
+      {
+        "command": "codexRemote.disconnectRelay",
+        "title": "Codex Remote: 릴레이 연결 끊기"
+      },
+      {
+        "command": "codexRemote.connectToRelaySessionById",
+        "title": "Codex Remote: 세션 ID로 릴레이 연결"
+      },
+      {
+        "command": "codexRemote.setRelaySessionId",
+        "title": "Codex Remote: 릴레이 세션 ID 설정 (다음 시작 시 사용)"
+      }
+    ],
+    "configuration": {
+      "title": "Codex Remote",
+      "properties": {
+        "codexRemote.relayServerUrl": {
+          "type": "string",
+          "scope": "application",
+          "default": "https://relay.example.com",
+          "description": "Base URL of the dedicated relay server used for remote sessions."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.74.0",
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "ws": "^8.19.0"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "name": "codex-remote-server",
+  "version": "0.1.0",
+  "description": "Legacy PC bridge for Codex Remote (deprecated)",
+  "author": {
+    "name": "김형진",
+    "email": "jaloveeye@gmail.com",
+    "url": "https://github.com/your-org/codex-remote"
+  },
+  "main": "dist/server.js",
+  "scripts": {
+    "start": "node dist/server.js",
+    "dev": "ts-node src/server.ts",
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "node ../test-websocket.js"
+  },
+  "dependencies": {
+    "ws": "^8.19.0",
+    "express": "^4.18.2",
+    "node-fetch": "^2.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.0",
+    "@types/express": "^4.17.21",
+    "@types/node-fetch": "^2.6.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/codex-remote.git"
+  },
+  "homepage": "https://github.com/your-org/codex-remote",
+  "bugs": {
+    "url": "https://github.com/your-org/codex-remote/issues"
+  }
+}
