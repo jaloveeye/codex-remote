@@ -1,166 +1,107 @@
 # Codex Remote 📱
 
-**Control Codex from your mobile device through a VS Code extension.**
+Control Codex from mobile/web through a VS Code extension and relay session.  
+VS Code 확장을 통해 모바일/웹에서 Codex를 원격 제어하는 프로젝트입니다.
 
-Codex Remote now assumes a **dedicated relay deployment** for this project.
-Do not point it at the legacy shared relay.
+---
 
-## Architecture
+## What is this? / 프로젝트 소개
 
-### Local mode
+**EN**
+- Codex Remote connects:
+  1) VS Code extension  
+  2) Codex app-server  
+  3) Mobile/Web client  
+  via a relay session ID (optional PIN).
 
-```text
-Mobile App / Web
-      ⇅ WebSocket (8766)
-VS Code extension
-      ⇅ JSON-RPC / stdio
-codex app-server
+**KO**
+- Codex Remote는 다음 3가지를 연결합니다.
+  1) VS Code 확장  
+  2) Codex app-server  
+  3) 모바일/웹 클라이언트  
+  그리고 세션 ID(선택: PIN)로 안전하게 연결합니다.
+
+---
+
+## Install / 설치
+
+### A) VS Code Marketplace (Recommended) / 마켓플레이스 설치 (권장)
+
+**EN**
+1. Open VS Code Extensions (`Ctrl/Cmd+Shift+X`)
+2. Search: **Codex Remote**
+3. Install and reload window
+
+**KO**
+1. VS Code 확장 탭 열기 (`Ctrl/Cmd+Shift+X`)
+2. **Codex Remote** 검색
+3. 설치 후 창 다시 로드
+
+### B) VSIX Install / VSIX 설치
+
+```bash
+code --install-extension codex-remote-extension-<version>.vsix --force
 ```
 
-### Relay mode
+---
 
-```text
-Mobile App / Web ⇄ Dedicated Relay Server ⇄ VS Code extension ⇄ codex app-server
-```
+## Required setup / 필수 설정
 
-## Active components
-
-```text
-.
-├── codex-extension/   # VS Code extension runtime (codex-only)
-├── codex-relay-server/      # Codex Relay Server to deploy separately
-├── mobile-app/        # Flutter client
-├── PROTOCOL.md        # Client/extension message protocol
-└── USER_MANUAL.md     # Setup and usage guide
-```
-
-## Prerequisites
-
-- Node.js 20+ recommended
-- `codex` CLI installed and authenticated
-- Flutter SDK (only for mobile/web client development)
-- A dedicated relay deployment URL such as `https://relay.example.com`
-
-## Quick start
-
-### 1. Verify Codex CLI
+### 1) Codex CLI
 
 ```bash
 codex --version
 codex auth login
-codex app-server
 ```
 
-### 2. Build the extension
+### 2) Relay URL in VS Code / VS Code 릴레이 URL 설정
 
-```bash
-cd codex-extension
-npm install
-npm run compile
-```
-
-Then set the relay URL in VS Code settings:
+Add in `settings.json`:
 
 ```json
 {
-  "codexRemote.relayServerUrl": "https://relay.example.com"
+  "codexRemote.relayServerUrl": "https://your-relay.example.com"
 }
 ```
 
-### 3. Run the mobile app
+---
 
-```bash
-cd mobile-app
-flutter pub get
-flutter run --dart-define=RELAY_SERVER_URL=https://relay.example.com
-```
+## How to use / 사용 방법
 
-### 4. Run or deploy the relay server
+**EN**
+1. Click the Codex Remote status bar item in VS Code
+2. Create/connect a relay session ID (optional PIN)
+3. Open mobile/web client
+4. Enter the same session ID (and PIN if enabled)
+5. Send prompts from mobile/web and receive Codex responses
 
-```bash
-cd codex-relay-server
-cp .env.example .env.local
-npm install
-npm run dev
-```
+**KO**
+1. VS Code 상태바의 Codex Remote를 클릭
+2. 릴레이 세션 ID 생성/연결 (선택: PIN 설정)
+3. 모바일/웹 클라이언트 열기
+4. 같은 세션 ID(PIN 사용 시 동일 PIN) 입력
+5. 모바일/웹에서 프롬프트 전송 후 Codex 응답 수신
 
-For local development, use `http://localhost:3000` as the relay URL in both the extension and the mobile app.
+---
 
-## AI prompt starter (복붙용)
+## For self-hosting / 직접 운영 시
 
-아래 부분을 긁어서 프롬프트에 입력하시오.
+**EN**
+- Use a dedicated relay server for your project.
+- Make extension and client use the same relay base URL.
 
-```text
-You are my Codex Remote setup assistant.
+**KO**
+- 프로젝트 전용 릴레이 서버를 사용하세요.
+- 확장과 클라이언트가 동일한 릴레이 URL을 사용해야 합니다.
 
-Project goal:
-- Control Codex from mobile/web through a VS Code extension and relay server.
+See:
+- [codex-relay-server/README.md](./codex-relay-server/README.md)
+- [mobile-app/README.md](./mobile-app/README.md)
 
-Environment:
-- Repo root: /Users/herace/Workspace/codex-remote
-- Extension: ./codex-extension
-- Relay server: ./codex-relay-server
-- Flutter client: ./mobile-app
-- Relay URL (example): https://relay.example.com
+---
 
-What I need from you:
-1) Install/prepare
-   - Verify Node.js, Codex CLI, Flutter SDK prerequisites.
-   - Build VS Code extension (npm run compile in codex-extension).
-   - If using VSIX, guide install command and reload window steps.
-2) Configure
-   - Set VS Code setting: codexRemote.relayServerUrl
-   - Ensure mobile/web client uses the same RELAY_SERVER_URL.
-3) Run
-   - Start relay server (codex-relay-server).
-   - Run Flutter web client (mobile-app).
-   - Connect extension and mobile with same 6-char session ID (+ optional PIN).
-4) Troubleshoot
-   - Check Codex Remote output logs.
-   - Verify session/PIN mismatch, relay URL mismatch, and stale sessions.
-   - Explain each fix step-by-step with exact commands.
-
-Use concise Korean instructions, but include exact shell commands and file paths.
-```
-
-## Relay separation rules
-
-- Deploy the relay as a **separate Vercel project** for this repository
-- Use **separate storage credentials** (Supabase or Upstash Redis)
-- Point both clients at the **same relay base URL**
-- Do not run tests against a legacy shared production relay by default
-
-## Connection flow
-
-### Local mode
-1. Start the extension
-2. Connect the app to `ws://<PC_IP>:8766`
-3. Send `insert_text` / `execute_command` messages
-4. Receive `chat_response`, `chat_response_chunk`, and `command_result`
-
-### Relay mode
-1. Deploy or start the relay server
-2. Configure the extension with `codexRemote.relayServerUrl`
-3. Launch the app with the same `RELAY_SERVER_URL`
-4. Connect both sides with the same 6-character session ID
-5. The relay forwards app commands to the extension and Codex responses back to the app
-
-## Development checks
-
-```bash
-npx tsc --noEmit -p codex-extension/tsconfig.json
-cd codex-relay-server && npm run type-check
-```
-
-## Notes
-
-- `pc-server` and `codex-cli` are legacy artifacts and are not part of the supported architecture.
-- The extension falls back to `RELAY_SERVER_URL` from the process environment when no VS Code setting is provided.
-
-## Related docs
+## Related docs / 관련 문서
 
 - [USER_MANUAL.md](./USER_MANUAL.md)
 - [PROTOCOL.md](./PROTOCOL.md)
 - [codex-extension/README.md](./codex-extension/README.md)
-- [codex-relay-server/README.md](./codex-relay-server/README.md)
-- [mobile-app/README.md](./mobile-app/README.md)
