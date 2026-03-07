@@ -29,80 +29,160 @@ final ThemeData lightTheme = ThemeData(
   useMaterial3: true,
   colorScheme: ColorScheme(
     brightness: Brightness.light,
-    // Primary 색상 (다크 네이비 블루)
-    primary: const Color(0xFF1A232E),
+    // Primary 색상 (웜 올리브)
+    primary: const Color(0xFF6C7254),
     onPrimary: Colors.white,
-    primaryContainer: const Color(0xFF2A3441),
-    onPrimaryContainer: const Color(0xFFE8EAF6),
-    // Secondary 색상 (약간 밝은 네이비)
-    secondary: const Color(0xFF3A4A5E),
+    primaryContainer: const Color(0xFFEDEDDD),
+    onPrimaryContainer: const Color(0xFF383B2A),
+    // Secondary 색상 (웜 그레이 올리브)
+    secondary: const Color(0xFF6B7466),
     onSecondary: Colors.white,
-    secondaryContainer: const Color(0xFFE3E8F0),
-    onSecondaryContainer: const Color(0xFF1A232E),
-    // Tertiary 색상 (청록색 계열 강조)
-    tertiary: const Color(0xFF00B4D8),
+    secondaryContainer: const Color(0xFFF0F2EA),
+    onSecondaryContainer: const Color(0xFF3A4437),
+    // Tertiary 색상 (옅은 모스 그린)
+    tertiary: const Color(0xFF87967B),
     onTertiary: Colors.white,
-    tertiaryContainer: const Color(0xFFB3E5FC),
-    onTertiaryContainer: const Color(0xFF006064),
+    tertiaryContainer: const Color(0xFFEAF0E4),
+    onTertiaryContainer: const Color(0xFF3A4734),
     // Error 색상
     error: const Color(0xFFDC3545),
     onError: Colors.white,
     errorContainer: const Color(0xFFFFEBEE),
     onErrorContainer: const Color(0xFFB71C1C),
     // Surface 색상
-    surface: Colors.white,
-    onSurface: const Color(0xFF1A232E),
-    surfaceContainerHighest: const Color(0xFFF5F7FA),
-    onSurfaceVariant: const Color(0xFF4A5568),
+    surface: const Color(0xFFFCFCF8),
+    onSurface: const Color(0xFF22281F),
+    surfaceContainerHighest: const Color(0xFFF2F1EA),
+    onSurfaceVariant: const Color(0xFF70766C),
     // Outline 색상
-    outline: const Color(0xFFCBD5E0),
-    outlineVariant: const Color(0xFFE2E8F0),
+    outline: const Color(0xFFD8DDD1),
+    outlineVariant: const Color(0xFFE7EADF),
     // Shadow
-    shadow: Colors.black.withOpacity(0.1),
+    shadow: Colors.black.withOpacity(0.05),
     scrim: Colors.black.withOpacity(0.5),
     // Inverse
-    inverseSurface: const Color(0xFF1A232E),
+    inverseSurface: const Color(0xFF2B332B),
     onInverseSurface: Colors.white,
-    inversePrimary: const Color(0xFF4A5A6E),
+    inversePrimary: const Color(0xFFD9DCC6),
   ),
+  scaffoldBackgroundColor: const Color(0xFFF7F5EF),
   appBarTheme: const AppBarTheme(
     centerTitle: false,
     elevation: 0,
     scrolledUnderElevation: 1,
+    backgroundColor: Colors.transparent,
+    foregroundColor: Color(0xFF22281F),
+    surfaceTintColor: Colors.transparent,
+    titleTextStyle: TextStyle(
+      fontSize: 18,
+      fontWeight: FontWeight.w700,
+      color: Color(0xFF22281F),
+      letterSpacing: -0.3,
+    ),
   ),
   cardTheme: CardThemeData(
     elevation: 0,
+    color: const Color(0xFFFFFEFB),
+    surfaceTintColor: Colors.transparent,
     shape: RoundedRectangleBorder(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(20),
       side: const BorderSide(
-        color: Color(0xFFCBD5E0), // outline 색상
+        color: Color(0xFFD8DDD1),
         width: 1,
       ),
     ),
   ),
   inputDecorationTheme: InputDecorationTheme(
     filled: true,
+    fillColor: const Color(0xFFFBFAF6),
+    hintStyle: const TextStyle(
+      color: Color(0xFF9AA092),
+      fontSize: 13,
+    ),
+    floatingLabelStyle: const TextStyle(
+      color: Color(0xFF6C7254),
+      fontWeight: FontWeight.w600,
+    ),
     border: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12),
-      borderSide: BorderSide.none,
+      borderRadius: BorderRadius.circular(16),
+      borderSide: const BorderSide(color: Color(0xFFD8DDD1)),
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(16),
+      borderSide: const BorderSide(color: Color(0xFFD8DDD1)),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(16),
+      borderSide: const BorderSide(color: Color(0xFF6C7254), width: 1.1),
     ),
     contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
   ),
   elevatedButtonTheme: ElevatedButtonThemeData(
     style: ElevatedButton.styleFrom(
       elevation: 0,
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      textStyle: const TextStyle(
+        fontWeight: FontWeight.w600,
+        letterSpacing: -0.1,
+      ),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
       ),
     ),
   ),
   outlinedButtonTheme: OutlinedButtonThemeData(
     style: OutlinedButton.styleFrom(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
+      side: const BorderSide(color: Color(0xFFD8DDD1)),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      textStyle: const TextStyle(
+        fontWeight: FontWeight.w600,
+        letterSpacing: -0.1,
       ),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+    ),
+  ),
+  dividerTheme: const DividerThemeData(
+    color: Color(0xFFE7EADF),
+    thickness: 1,
+    space: 1,
+  ),
+  chipTheme: ChipThemeData(
+    backgroundColor: Colors.white,
+    selectedColor: const Color(0xFFEFF3EA),
+    disabledColor: const Color(0xFFF8F7F2),
+    side: const BorderSide(color: Color(0xFFD8DDD1)),
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(999),
+    ),
+    labelStyle: const TextStyle(
+      fontSize: 12,
+      fontWeight: FontWeight.w500,
+    ),
+    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+  ),
+  listTileTheme: const ListTileThemeData(
+    contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.all(Radius.circular(16)),
+    ),
+  ),
+  expansionTileTheme: const ExpansionTileThemeData(
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.all(Radius.circular(20)),
+    ),
+    collapsedShape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.all(Radius.circular(20)),
+    ),
+    childrenPadding: EdgeInsets.zero,
+  ),
+  snackBarTheme: SnackBarThemeData(
+    behavior: SnackBarBehavior.floating,
+    backgroundColor: const Color(0xFF454A34),
+    contentTextStyle: const TextStyle(color: Colors.white),
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(14),
     ),
   ),
 );
@@ -114,80 +194,161 @@ final ThemeData darkTheme = ThemeData(
   useMaterial3: true,
   colorScheme: ColorScheme(
     brightness: Brightness.dark,
-    // Primary 색상 (밝은 청록색)
-    primary: const Color(0xFF4DB6E5),
-    onPrimary: const Color(0xFF003544),
-    primaryContainer: const Color(0xFF1A3A4A),
-    onPrimaryContainer: const Color(0xFFB3E5FC),
-    // Secondary 색상 (부드러운 블루그레이)
-    secondary: const Color(0xFF8BA4B8),
-    onSecondary: const Color(0xFF1A2A36),
-    secondaryContainer: const Color(0xFF2A3A4A),
-    onSecondaryContainer: const Color(0xFFD0E4F0),
-    // Tertiary 색상 (시안 계열 강조)
-    tertiary: const Color(0xFF00D4FF),
-    onTertiary: const Color(0xFF003344),
-    tertiaryContainer: const Color(0xFF004D5C),
-    onTertiaryContainer: const Color(0xFFB3F0FF),
+    // Primary 색상 (은은한 웜 올리브)
+    primary: const Color(0xFFD9DCC6),
+    onPrimary: const Color(0xFF2D311F),
+    primaryContainer: const Color(0xFF3A3F2A),
+    onPrimaryContainer: const Color(0xFFF0F2E5),
+    // Secondary 색상 (웜 그레이 올리브)
+    secondary: const Color(0xFFA8B19F),
+    onSecondary: const Color(0xFF202920),
+    secondaryContainer: const Color(0xFF293029),
+    onSecondaryContainer: const Color(0xFFE7EDE0),
+    // Tertiary 색상 (부드러운 허브 그린)
+    tertiary: const Color(0xFFB4C3A4),
+    onTertiary: const Color(0xFF22301F),
+    tertiaryContainer: const Color(0xFF334030),
+    onTertiaryContainer: const Color(0xFFE7EFDE),
     // Error 색상
     error: const Color(0xFFFF6B6B),
     onError: const Color(0xFF3D0000),
     errorContainer: const Color(0xFF5C2323),
     onErrorContainer: const Color(0xFFFFDADA),
     // Surface 색상
-    surface: const Color(0xFF121820),
-    onSurface: const Color(0xFFE8EAF0),
-    surfaceContainerHighest: const Color(0xFF1E2630),
-    onSurfaceVariant: const Color(0xFFB0B8C4),
+    surface: const Color(0xFF171C17),
+    onSurface: const Color(0xFFF1F4EA),
+    surfaceContainerHighest: const Color(0xFF252D25),
+    onSurfaceVariant: const Color(0xFFC0C8BA),
     // Outline 색상
-    outline: const Color(0xFF3A4550),
-    outlineVariant: const Color(0xFF2A3440),
+    outline: const Color(0xFF596359),
+    outlineVariant: const Color(0xFF3D463D),
     // Shadow
-    shadow: Colors.black.withOpacity(0.3),
+    shadow: Colors.black.withOpacity(0.25),
     scrim: Colors.black.withOpacity(0.6),
     // Inverse
-    inverseSurface: const Color(0xFFE8EAF0),
-    onInverseSurface: const Color(0xFF1A232E),
-    inversePrimary: const Color(0xFF1A6080),
+    inverseSurface: const Color(0xFFE6EBDD),
+    onInverseSurface: const Color(0xFF1D241D),
+    inversePrimary: const Color(0xFF343923),
   ),
+  scaffoldBackgroundColor: const Color(0xFF121612),
   appBarTheme: const AppBarTheme(
     centerTitle: false,
     elevation: 0,
     scrolledUnderElevation: 1,
+    backgroundColor: Colors.transparent,
+    foregroundColor: Color(0xFFE6EBDD),
+    surfaceTintColor: Colors.transparent,
+    titleTextStyle: TextStyle(
+      fontSize: 18,
+      fontWeight: FontWeight.w700,
+      color: Color(0xFFE6EBDD),
+      letterSpacing: -0.3,
+    ),
   ),
   cardTheme: CardThemeData(
     elevation: 0,
+    color: const Color(0xFF1D241D),
+    surfaceTintColor: Colors.transparent,
     shape: RoundedRectangleBorder(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(20),
       side: const BorderSide(
-        color: Color(0xFF3A4550), // outline 색상 (다크)
+        color: Color(0xFF3D463D),
         width: 1,
       ),
     ),
   ),
   inputDecorationTheme: InputDecorationTheme(
     filled: true,
+    fillColor: const Color(0xFF202720),
+    hintStyle: const TextStyle(
+      color: Color(0xFFAAB3A3),
+      fontSize: 13,
+    ),
+    floatingLabelStyle: const TextStyle(
+      color: Color(0xFFD9DCC6),
+      fontWeight: FontWeight.w600,
+    ),
     border: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12),
-      borderSide: BorderSide.none,
+      borderRadius: BorderRadius.circular(16),
+      borderSide: const BorderSide(color: Color(0xFF4A544A)),
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(16),
+      borderSide: const BorderSide(color: Color(0xFF4A544A)),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(16),
+      borderSide: const BorderSide(color: Color(0xFFB9BE9B), width: 1.1),
     ),
     contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
   ),
   elevatedButtonTheme: ElevatedButtonThemeData(
     style: ElevatedButton.styleFrom(
       elevation: 0,
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      textStyle: const TextStyle(
+        fontWeight: FontWeight.w600,
+        letterSpacing: -0.1,
+      ),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
       ),
     ),
   ),
   outlinedButtonTheme: OutlinedButtonThemeData(
     style: OutlinedButton.styleFrom(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
+      side: const BorderSide(color: Color(0xFF596359)),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      textStyle: const TextStyle(
+        fontWeight: FontWeight.w600,
+        letterSpacing: -0.1,
       ),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+    ),
+  ),
+  dividerTheme: const DividerThemeData(
+    color: Color(0xFF3D463D),
+    thickness: 1,
+    space: 1,
+  ),
+  chipTheme: ChipThemeData(
+    backgroundColor: const Color(0xFF202720),
+    selectedColor: const Color(0xFF313A31),
+    disabledColor: const Color(0xFF161B16),
+    side: const BorderSide(color: Color(0xFF4A544A)),
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(999),
+    ),
+    labelStyle: const TextStyle(
+      fontSize: 12,
+      fontWeight: FontWeight.w500,
+      color: Color(0xFFF1F4EA),
+    ),
+    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+  ),
+  listTileTheme: const ListTileThemeData(
+    contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.all(Radius.circular(16)),
+    ),
+  ),
+  expansionTileTheme: const ExpansionTileThemeData(
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.all(Radius.circular(20)),
+    ),
+    collapsedShape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.all(Radius.circular(20)),
+    ),
+    childrenPadding: EdgeInsets.zero,
+  ),
+  snackBarTheme: SnackBarThemeData(
+    behavior: SnackBarBehavior.floating,
+    backgroundColor: const Color(0xFF394139),
+    contentTextStyle: const TextStyle(color: Color(0xFFF1F4EA)),
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(14),
     ),
   ),
 );
@@ -2270,13 +2431,39 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     });
   }
 
+  Widget _buildFilterChipLabel({
+    required IconData icon,
+    required String text,
+    required Color textColor,
+    Color? iconColor,
+    double iconSize = 14,
+    double fontSize = 12,
+  }) {
+    final resolvedIconColor = iconColor ?? textColor;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: iconSize, color: resolvedIconColor),
+        SizedBox(width: fontSize <= 10 ? 2 : 4),
+        Text(
+          text,
+          style: TextStyle(
+            fontSize: fontSize,
+            fontWeight: FontWeight.w600,
+            color: textColor,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildMessageItem(MessageItem message) {
     // 구분선
     if (message.type == MessageType.chatResponseDivider) {
-      return const Divider(
+      return Divider(
         height: 1,
-        thickness: 2,
-        color: Colors.blue,
+        thickness: 1,
+        color: Theme.of(context).colorScheme.outlineVariant,
       );
     }
 
@@ -2286,15 +2473,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         margin: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
         padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
         decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.primaryContainer,
-          borderRadius: BorderRadius.circular(12),
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: Theme.of(context).colorScheme.outlineVariant,
+          ),
         ),
         child: Row(
           children: [
             Icon(
               Icons.smart_toy,
               size: 20,
-              color: Theme.of(context).colorScheme.onPrimaryContainer,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
             const SizedBox(width: 12),
             Text(
@@ -2302,7 +2492,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               style: TextStyle(
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
-                color: Theme.of(context).colorScheme.onPrimaryContainer,
+                color: Theme.of(context).colorScheme.onSurface,
               ),
             ),
           ],
@@ -2317,9 +2507,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: Theme.of(context).colorScheme.outline.withOpacity(0.1),
+            color: Theme.of(context).colorScheme.outline.withOpacity(0.45),
             width: 1,
           ),
         ),
@@ -2348,8 +2538,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       child: Container(
                         width: 8,
                         height: 8,
-                        decoration: const BoxDecoration(
-                          color: Colors.blue,
+                        decoration: BoxDecoration(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurfaceVariant
+                              .withOpacity(0.7),
                           shape: BoxShape.circle,
                         ),
                       ),
@@ -2376,9 +2569,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: Theme.of(context).colorScheme.outline.withOpacity(0.1),
+            color: Theme.of(context).colorScheme.outline.withOpacity(0.45),
             width: 1,
           ),
         ),
@@ -2423,11 +2616,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         margin: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
         padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
         decoration: BoxDecoration(
-          color:
-              Theme.of(context).colorScheme.secondaryContainer.withOpacity(0.3),
-          borderRadius: BorderRadius.circular(12),
+          color: Theme.of(context)
+              .colorScheme
+              .secondaryContainer
+              .withOpacity(0.45),
+          borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: Theme.of(context).colorScheme.secondary.withOpacity(0.2),
+            color: Theme.of(context).colorScheme.outline.withOpacity(0.7),
             width: 1,
           ),
         ),
@@ -2439,8 +2634,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 Container(
                   padding: const EdgeInsets.all(6),
                   decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.secondaryContainer,
-                    shape: BoxShape.circle,
+                    color:
+                        Theme.of(context).colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(10),
                   ),
                   child: Icon(
                     Icons.person,
@@ -2450,7 +2646,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 ),
                 const SizedBox(width: 12),
                 Text(
-                  '📝 Your Prompt',
+                  'Your prompt',
                   style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
@@ -2466,10 +2662,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
-                      color: Colors.blue.shade100,
-                      borderRadius: BorderRadius.circular(4),
-                      border:
-                          Border.all(color: Colors.blue.shade300, width: 0.5),
+                      color:
+                          Theme.of(context).colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .outline
+                            .withOpacity(0.7),
+                        width: 0.75,
+                      ),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -2477,7 +2679,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                         Icon(
                           _getModeIcon(message.agentMode!),
                           size: 12,
-                          color: Colors.blue.shade700,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
                         const SizedBox(width: 4),
                         Text(
@@ -2485,7 +2687,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           style: TextStyle(
                             fontSize: 10,
                             fontWeight: FontWeight.w500,
-                            color: Colors.blue.shade700,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
                           ),
                         ),
                       ],
@@ -2558,7 +2761,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 6.0),
         decoration: BoxDecoration(
           color: logColor.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(6.0),
+          borderRadius: BorderRadius.circular(12.0),
           border: Border.all(color: logColor.withOpacity(0.3), width: 1),
         ),
         child: Row(
@@ -2589,13 +2792,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     // 시스템 메시지 스타일
     if (message.type == MessageType.system) {
       return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 6.0),
+        margin: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+        padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
+        decoration: BoxDecoration(
+          color: Theme.of(context)
+              .colorScheme
+              .surfaceContainerHighest
+              .withOpacity(0.55),
+          borderRadius: BorderRadius.circular(14),
+        ),
         child: Row(
           children: [
             Icon(
               _getSystemMessageIcon(message.text),
               size: 14,
-              color: Colors.grey[600],
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
             const SizedBox(width: 8),
             Expanded(
@@ -3436,22 +3647,31 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       appBar: AppBar(
         title: Row(
           children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: Image.asset(
-                'images/app_icon.png',
-                width: 28,
-                height: 28,
+            Container(
+              width: 36,
+              height: 36,
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primaryContainer,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.asset(
+                  'images/app_icon.png',
+                  width: 24,
+                  height: 24,
+                ),
               ),
             ),
-            const SizedBox(width: 8),
-            const Expanded(
+            const SizedBox(width: 12),
+            Expanded(
               child: Text(
                 'Codex Remote',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: -0.5,
-                ),
+                style: Theme.of(context).appBarTheme.titleTextStyle,
                 overflow: TextOverflow.ellipsis,
               ),
             ),
@@ -3527,7 +3747,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               children: [
                 // 최상단: 연결 상태 및 설정 카드
                 Container(
-                  margin: const EdgeInsets.all(8.0),
+                  margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
                   child: Card(
                     child: ExpansionTile(
                       controller: _expansionTileController,
@@ -4366,7 +4586,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 // 가운데: 메시지 로그 (가장 많은 공간 차지)
                 Expanded(
                   child: Card(
-                    margin: const EdgeInsets.all(8.0),
+                    margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
@@ -4473,14 +4693,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                 runSpacing: 4.0,
                                 children: [
                                   FilterChip(
-                                    label: const Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(Icons.smart_toy, size: 14),
-                                        SizedBox(width: 4),
-                                        Text('AI Response',
-                                            style: TextStyle(fontSize: 12)),
-                                      ],
+                                    label: _buildFilterChipLabel(
+                                      icon: Icons.smart_toy,
+                                      text: 'AI Response',
+                                      textColor: (_activeFilters[
+                                                  MessageFilter.aiResponse] ??
+                                              true)
+                                          ? Theme.of(context)
+                                              .colorScheme
+                                              .onTertiaryContainer
+                                          : Theme.of(context)
+                                              .colorScheme
+                                              .onSurface,
                                     ),
                                     selected: _activeFilters[
                                             MessageFilter.aiResponse] ??
@@ -4498,14 +4722,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                     },
                                   ),
                                   FilterChip(
-                                    label: const Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(Icons.person, size: 14),
-                                        SizedBox(width: 4),
-                                        Text('User Prompt',
-                                            style: TextStyle(fontSize: 12)),
-                                      ],
+                                    label: _buildFilterChipLabel(
+                                      icon: Icons.person,
+                                      text: 'User Prompt',
+                                      textColor: (_activeFilters[
+                                                  MessageFilter.userPrompt] ??
+                                              true)
+                                          ? Theme.of(context)
+                                              .colorScheme
+                                              .onSecondaryContainer
+                                          : Theme.of(context)
+                                              .colorScheme
+                                              .onSurface,
                                     ),
                                     selected: _activeFilters[
                                             MessageFilter.userPrompt] ??
@@ -4523,14 +4751,23 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                     },
                                   ),
                                   FilterChip(
-                                    label: const Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(Icons.bug_report, size: 14),
-                                        SizedBox(width: 4),
-                                        Text('Logs',
-                                            style: TextStyle(fontSize: 12)),
-                                      ],
+                                    label: _buildFilterChipLabel(
+                                      icon: Icons.bug_report,
+                                      text: 'Logs',
+                                      textColor:
+                                          (_activeFilters[MessageFilter.log] ??
+                                                  false)
+                                              ? const Color(0xFF7A4B00)
+                                              : Theme.of(context)
+                                                  .colorScheme
+                                                  .onSurface,
+                                      iconColor:
+                                          (_activeFilters[MessageFilter.log] ??
+                                                  false)
+                                              ? const Color(0xFFFF9800)
+                                              : Theme.of(context)
+                                                  .colorScheme
+                                                  .onSurfaceVariant,
                                     ),
                                     selected:
                                         _activeFilters[MessageFilter.log] ??
@@ -4568,16 +4805,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                     ),
                                     const SizedBox(width: 4),
                                     FilterChip(
-                                      label: const Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(Icons.error,
-                                              size: 12,
-                                              color: Color(0xFFDC3545)),
-                                          SizedBox(width: 2),
-                                          Text('Error',
-                                              style: TextStyle(fontSize: 10)),
-                                        ],
+                                      label: _buildFilterChipLabel(
+                                        icon: Icons.error,
+                                        text: 'Error',
+                                        textColor:
+                                            (_logLevelFilters[LogLevel.error] ??
+                                                    true)
+                                                ? const Color(0xFF8B1E2D)
+                                                : Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurface,
+                                        iconColor: const Color(0xFFDC3545),
+                                        iconSize: 12,
+                                        fontSize: 10,
                                       ),
                                       visualDensity: VisualDensity.compact,
                                       selected:
@@ -4593,16 +4833,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                       },
                                     ),
                                     FilterChip(
-                                      label: const Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(Icons.warning,
-                                              size: 12,
-                                              color: Color(0xFFFF9800)),
-                                          SizedBox(width: 2),
-                                          Text('Warn',
-                                              style: TextStyle(fontSize: 10)),
-                                        ],
+                                      label: _buildFilterChipLabel(
+                                        icon: Icons.warning,
+                                        text: 'Warn',
+                                        textColor: (_logLevelFilters[
+                                                    LogLevel.warning] ??
+                                                true)
+                                            ? const Color(0xFF8A4B00)
+                                            : Theme.of(context)
+                                                .colorScheme
+                                                .onSurface,
+                                        iconColor: const Color(0xFFFF9800),
+                                        iconSize: 12,
+                                        fontSize: 10,
                                       ),
                                       visualDensity: VisualDensity.compact,
                                       selected:
@@ -4618,18 +4861,29 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                       },
                                     ),
                                     FilterChip(
-                                      label: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(Icons.info,
-                                              size: 12,
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .tertiary),
-                                          const SizedBox(width: 2),
-                                          const Text('Info',
-                                              style: TextStyle(fontSize: 10)),
-                                        ],
+                                      label: _buildFilterChipLabel(
+                                        icon: Icons.info,
+                                        text: 'Info',
+                                        textColor:
+                                            (_logLevelFilters[LogLevel.info] ??
+                                                    true)
+                                                ? Theme.of(context)
+                                                    .colorScheme
+                                                    .onTertiaryContainer
+                                                : Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurface,
+                                        iconColor:
+                                            (_logLevelFilters[LogLevel.info] ??
+                                                    true)
+                                                ? Theme.of(context)
+                                                    .colorScheme
+                                                    .onTertiaryContainer
+                                                : Theme.of(context)
+                                                    .colorScheme
+                                                    .tertiary,
+                                        iconSize: 12,
+                                        fontSize: 10,
                                       ),
                                       visualDensity: VisualDensity.compact,
                                       selected:
@@ -4650,14 +4904,27 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                     ),
                                   ],
                                   FilterChip(
-                                    label: const Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(Icons.info_outline, size: 14),
-                                        SizedBox(width: 4),
-                                        Text('System',
-                                            style: TextStyle(fontSize: 12)),
-                                      ],
+                                    label: _buildFilterChipLabel(
+                                      icon: Icons.info_outline,
+                                      text: 'System',
+                                      textColor: (_activeFilters[
+                                                  MessageFilter.system] ??
+                                              true)
+                                          ? Theme.of(context)
+                                              .colorScheme
+                                              .onSurface
+                                          : Theme.of(context)
+                                              .colorScheme
+                                              .onSurface,
+                                      iconColor: (_activeFilters[
+                                                  MessageFilter.system] ??
+                                              true)
+                                          ? Theme.of(context)
+                                              .colorScheme
+                                              .onSurfaceVariant
+                                          : Theme.of(context)
+                                              .colorScheme
+                                              .onSurfaceVariant,
                                     ),
                                     selected:
                                         _activeFilters[MessageFilter.system] ??
@@ -4690,7 +4957,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 if (_isConnected) ...[
                   const Divider(height: 1),
                   Card(
-                    margin: const EdgeInsets.all(8.0),
+                    margin: const EdgeInsets.fromLTRB(12, 12, 12, 12),
                     child: Padding(
                       padding: const EdgeInsets.all(12.0),
                       child: Column(
