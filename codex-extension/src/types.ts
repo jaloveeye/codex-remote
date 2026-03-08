@@ -39,6 +39,9 @@ export interface CommandMessage {
   useFlatMode?: boolean;
   senderDeviceId?: string;
   provider?: AIProvider; // backward-compatible field; codex only
+  requestId?: string;
+  method?: string;
+  response?: Record<string, unknown>;
 }
 
 export interface CommandResult {
