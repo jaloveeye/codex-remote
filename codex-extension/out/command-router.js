@@ -80,6 +80,9 @@ class CommandRouter {
                 case "execute_action":
                     result = await this.handleExecuteAction(command);
                     break;
+                case "codex_server_request_response":
+                    result = await this.handleCodexServerRequestResponse(command);
+                    break;
                 default:
                     const errorMsg = `Unknown command type: ${command.type}`;
                     this.log(errorMsg);
@@ -325,6 +328,36 @@ class CommandRouter {
     async handleExecuteAction(command) {
         const result = await this.commandHandler.executeAction(command.action || "");
         return result;
+    }
+    async handleCodexServerRequestResponse(command) {
+        const requestId = (command.requestId || "").trim();
+        const method = (command.method || "").trim();
+        const response = command.response && typeof command.response === "object"
+            ? command.response
+            : null;
+        if (!requestId) {
+            return {
+                success: false,
+                error: "requestId is required for codex_server_request_response",
+            };
+        }
+        if (!method) {
+            return {
+                success: false,
+                error: "method is required for codex_server_request_response",
+            };
+        }
+        if (!response) {
+            return {
+                success: false,
+                error: "response payload is required for codex_server_request_response",
+            };
+        }
+        await this.commandHandler.resolveCodexServerRequestResponse(requestId, method, response);
+        return {
+            success: true,
+            message: "Codex server request response forwarded",
+        };
     }
 }
 exports.CommandRouter = CommandRouter;

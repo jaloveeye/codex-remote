@@ -183,6 +183,12 @@ class CommandHandler {
     async executeCommand(command, ...args) {
         return await vscode.commands.executeCommand(command, ...args);
     }
+    async resolveCodexServerRequestResponse(requestId, method, response) {
+        if (!this.codexHandler) {
+            throw new Error("Codex handler is not initialized.");
+        }
+        this.codexHandler.resolveRemoteServerRequestResponse(requestId, method, response);
+    }
     async getActiveFile() {
         const editor = vscode.window.activeTextEditor;
         if (!editor || !editor.document) {

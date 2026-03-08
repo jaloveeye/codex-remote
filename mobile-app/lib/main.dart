@@ -492,9 +492,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   List<Map<String, dynamic>> _chatHistory = []; // 대화 히스토리 목록
   List<String> _availableSessions = []; // 사용 가능한 세션 목록
   List<Map<String, dynamic>> _pendingCommandApprovals = [];
+  List<Map<String, dynamic>> _pendingCodexServerRequests = [];
   List<Map<String, dynamic>> _recentCommandEvents = [];
   bool _loadingCommandApprovals = false;
   bool _loadingCommandEvents = false;
+  final Set<String> _submittingCodexRequestIds = <String>{};
   DateTime? _lastCommandMetaRefreshAt;
 
   /// 같은 세션 재연결 시 메인 목록에 히스토리 반영용 (get_chat_history 응답 시 사용)
@@ -921,7 +923,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             // 일반 명령 성공 메시지는 세션/히스토리 조회 시에는 표시하지 않음
             if (commandType != 'get_session_info' &&
                 commandType != 'get_chat_history' &&
-                commandType != 'get_runtime_capabilities') {
+                commandType != 'get_runtime_capabilities' &&
+                commandType != 'codex_server_request_response') {
               _messages.add(
                   MessageItem('✅ Command succeeded', type: MessageType.system));
             }
@@ -937,6 +940,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 type: MessageType.system));
             _isWaitingForResponse = false;
           }
+        } else if (type == 'codex_server_request') {
+          unawaited(_handleCodexServerRequest(
+              Map<String, dynamic>.from(data as Map)));
+        } else if (type == 'codex_server_request_status') {
+          _handleCodexServerRequestStatus(
+              Map<String, dynamic>.from(data as Map));
         } else if (type == 'log') {
           // 실시간 로그 메시지 처리
           final logLevelStr = data['level'] ?? 'info';
@@ -1489,7 +1498,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           // 일반 명령 성공 메시지는 세션/히스토리 조회 시에는 표시하지 않음
           if (commandType != 'get_session_info' &&
               commandType != 'get_chat_history' &&
-              commandType != 'get_runtime_capabilities') {
+              commandType != 'get_runtime_capabilities' &&
+              commandType != 'codex_server_request_response') {
             _messages.add(
                 MessageItem('✅ Command succeeded', type: MessageType.system));
           }
@@ -1509,6 +1519,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _messages.add(MessageItem('❌ Error: ${messageData['message']}',
             type: MessageType.system));
         _isWaitingForResponse = false;
+      } else if (type == 'codex_server_request') {
+        unawaited(_handleCodexServerRequest(
+            Map<String, dynamic>.from(messageData as Map)));
+      } else if (type == 'codex_server_request_status') {
+        _handleCodexServerRequestStatus(
+            Map<String, dynamic>.from(messageData as Map));
       } else if (type == 'user_message') {
         final text = messageData['text'] ?? '';
         _messages
@@ -2121,6 +2137,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _isReconnecting = false;
         _reconnectAttempts = 0;
         _pendingCommandApprovals = [];
+        _pendingCodexServerRequests = [];
         _recentCommandEvents = [];
         _loadingCommandApprovals = false;
         _loadingCommandEvents = false;
@@ -3287,6 +3304,323 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       });
       _scrollToBottom();
     }
+  }
+
+  bool _isTargetedToThisMobile(Map<String, dynamic> payload) {
+    final targetDeviceId = payload['targetDeviceId']?.toString().trim() ?? '';
+    return targetDeviceId.isEmpty || targetDeviceId == _deviceId;
+  }
+
+  void _upsertPendingCodexServerRequest(Map<String, dynamic> request) {
+    final requestId = request['requestId']?.toString() ?? '';
+    if (requestId.isEmpty) return;
+
+    final next = Map<String, dynamic>.from(request);
+    final existingIndex = _pendingCodexServerRequests
+        .indexWhere((item) => item['requestId']?.toString() == requestId);
+    if (existingIndex >= 0) {
+      _pendingCodexServerRequests[existingIndex] = next;
+    } else {
+      _pendingCodexServerRequests.insert(0, next);
+    }
+  }
+
+  void _removePendingCodexServerRequest(String requestId) {
+    _pendingCodexServerRequests
+        .removeWhere((item) => item['requestId']?.toString() == requestId);
+    _submittingCodexRequestIds.remove(requestId);
+  }
+
+  String _codexRequestTitle(Map<String, dynamic> request) {
+    final title = request['title']?.toString().trim() ?? '';
+    if (title.isNotEmpty) return title;
+    switch (request['requestKind']) {
+      case 'command_execution':
+        return 'Codex wants to run a command';
+      case 'file_change':
+        return 'Codex wants to modify files';
+      case 'user_input':
+        return 'Codex needs more input';
+      default:
+        return 'Codex request';
+    }
+  }
+
+  String _codexRequestSummary(Map<String, dynamic> request) {
+    final summary = request['summary']?.toString().trim() ?? '';
+    if (summary.isNotEmpty) return summary;
+    final detailLines = List<String>.from(
+        (request['detailLines'] as List? ?? []).map((e) => e.toString()));
+    return detailLines.isNotEmpty ? detailLines.first : '';
+  }
+
+  Future<void> _handleCodexServerRequest(Map<String, dynamic> payload) async {
+    if (!_isTargetedToThisMobile(payload)) return;
+
+    final requestId = payload['requestId']?.toString() ?? '';
+    if (requestId.isEmpty) return;
+
+    if (!mounted) return;
+    setState(() {
+      _upsertPendingCodexServerRequest(payload);
+      _messages.add(MessageItem('📲 ${_codexRequestTitle(payload)} — 모바일 응답 필요',
+          type: MessageType.system));
+      _isWaitingForResponse = false;
+    });
+    _scrollToBottom();
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(_codexRequestTitle(payload)),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  void _handleCodexServerRequestStatus(Map<String, dynamic> payload) {
+    if (!_isTargetedToThisMobile(payload)) return;
+
+    final requestId = payload['requestId']?.toString() ?? '';
+    final status = payload['status']?.toString() ?? 'unknown';
+    final message = payload['message']?.toString() ?? '';
+    if (requestId.isEmpty || !mounted) return;
+
+    setState(() {
+      _removePendingCodexServerRequest(requestId);
+      if (message.isNotEmpty) {
+        _messages.add(MessageItem('ℹ️ ${_codexRequestTitle(payload)}: $message',
+            type: MessageType.system));
+      }
+    });
+    _scrollToBottom();
+
+    if (message.isNotEmpty &&
+        (status == 'timed_out' || status == 'fallback_to_desktop')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    }
+  }
+
+  Future<void> _sendCodexServerRequestResponse(Map<String, dynamic> request,
+      Map<String, dynamic> responsePayload) async {
+    final requestId = request['requestId']?.toString() ?? '';
+    final method = request['method']?.toString() ?? '';
+    if (requestId.isEmpty || method.isEmpty) {
+      throw Exception('requestId/method missing');
+    }
+
+    final message = {
+      'type': 'codex_server_request_response',
+      'id': DateTime.now().millisecondsSinceEpoch.toString(),
+      'requestId': requestId,
+      'method': method,
+      'response': responsePayload,
+      if (_currentClientId != null) 'clientId': _currentClientId,
+    };
+
+    if (_connectionType == ConnectionType.local) {
+      if (_localWebSocket == null) {
+        throw Exception('Local WebSocket not connected');
+      }
+      _localWebSocket!.sink.add(jsonEncode(message));
+      return;
+    }
+
+    if (_sessionId == null) {
+      throw Exception('Session ID is required for relay connection');
+    }
+
+    final response = await http.post(
+      _relayUri('/api/send'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'sessionId': _sessionId,
+        'deviceId': _deviceId,
+        'deviceType': 'mobile',
+        'type': 'codex_server_request_response',
+        'data': message,
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('HTTP ${response.statusCode}: ${response.body}');
+    }
+
+    if (response.body.isNotEmpty) {
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      if (body['success'] != true) {
+        throw Exception(body['error']?.toString() ?? 'Relay send failed');
+      }
+    }
+  }
+
+  Future<void> _submitCodexDecision(Map<String, dynamic> request,
+      Map<String, dynamic> responsePayload) async {
+    final requestId = request['requestId']?.toString() ?? '';
+    if (requestId.isEmpty || !mounted) return;
+
+    setState(() {
+      _submittingCodexRequestIds.add(requestId);
+    });
+
+    try {
+      await _sendCodexServerRequestResponse(request, responsePayload);
+      if (!mounted) return;
+      setState(() {
+        _removePendingCodexServerRequest(requestId);
+        _messages.add(MessageItem('✅ ${_codexRequestTitle(request)} 응답 전송됨',
+            type: MessageType.system));
+      });
+      _scrollToBottom();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _submittingCodexRequestIds.remove(requestId);
+        _messages.add(MessageItem('❌ 요청 응답 실패: $e', type: MessageType.system));
+      });
+      _scrollToBottom();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('응답 전송 실패: $e')),
+      );
+    }
+  }
+
+  Future<void> _openCodexUserInputDialog(Map<String, dynamic> request) async {
+    final requestId = request['requestId']?.toString() ?? '';
+    final rawQuestions = List<Map<String, dynamic>>.from(
+        (request['questions'] as List? ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map)));
+    if (requestId.isEmpty || rawQuestions.isEmpty || !mounted) return;
+
+    final textControllers = <String, TextEditingController>{};
+    final selectedValues = <String, String>{};
+
+    for (final question in rawQuestions) {
+      final id = question['id']?.toString() ?? '';
+      if (id.isEmpty) continue;
+      final options = List<Map<String, dynamic>>.from(
+          (question['options'] as List? ?? [])
+              .map((e) => Map<String, dynamic>.from(e as Map)));
+      if (options.isEmpty) {
+        textControllers[id] = TextEditingController();
+      } else {
+        final firstLabel = options.first['label']?.toString() ?? '';
+        if (firstLabel.isNotEmpty) {
+          selectedValues[id] = firstLabel;
+        }
+      }
+    }
+
+    final submitted = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(builder: (context, setLocalState) {
+          return AlertDialog(
+            title: Text(_codexRequestTitle(request)),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: rawQuestions.map((question) {
+                  final id = question['id']?.toString() ?? '';
+                  final header =
+                      question['header']?.toString() ?? 'Input required';
+                  final prompt = question['question']?.toString() ?? '';
+                  final isSecret = question['isSecret'] == true;
+                  final options = List<Map<String, dynamic>>.from(
+                      (question['options'] as List? ?? [])
+                          .map((e) => Map<String, dynamic>.from(e as Map)));
+
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(header,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w600)),
+                        if (prompt.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(prompt, style: const TextStyle(fontSize: 12)),
+                        ],
+                        const SizedBox(height: 8),
+                        if (options.isNotEmpty)
+                          DropdownButtonFormField<String>(
+                            value: selectedValues[id],
+                            items: options
+                                .map((option) => DropdownMenuItem<String>(
+                                      value: option['label']?.toString() ?? '',
+                                      child: Text(
+                                          option['label']?.toString() ?? ''),
+                                    ))
+                                .toList(),
+                            onChanged: (value) {
+                              setLocalState(() {
+                                if (value != null) {
+                                  selectedValues[id] = value;
+                                }
+                              });
+                            },
+                          )
+                        else
+                          TextField(
+                            controller: textControllers[id],
+                            obscureText: isSecret,
+                            decoration: const InputDecoration(
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final answers = <String, dynamic>{};
+                  for (final question in rawQuestions) {
+                    final id = question['id']?.toString() ?? '';
+                    if (id.isEmpty) continue;
+                    final options = List<Map<String, dynamic>>.from(
+                        (question['options'] as List? ?? [])
+                            .map((e) => Map<String, dynamic>.from(e as Map)));
+                    final value = options.isNotEmpty
+                        ? (selectedValues[id] ?? '')
+                        : textControllers[id]?.text.trim() ?? '';
+                    if (value.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('모든 입력을 채워주세요')),
+                      );
+                      return;
+                    }
+                    answers[id] = {
+                      'answers': [value]
+                    };
+                  }
+                  Navigator.of(dialogContext).pop({'answers': answers});
+                },
+                child: const Text('Submit'),
+              ),
+            ],
+          );
+        });
+      },
+    );
+
+    for (final controller in textControllers.values) {
+      controller.dispose();
+    }
+
+    if (submitted == null) return;
+    await _submitCodexDecision(request, submitted);
   }
 
   Color _riskColor(String? riskLevel) {
@@ -5800,7 +6134,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                               child: Card(
                                 child: ExpansionTile(
                                   title: Text(
-                                    'Command approvals & events',
+                                    'Approvals & actions',
                                     style: TextStyle(
                                       fontSize: 15,
                                       fontWeight: FontWeight.w600,
@@ -5810,7 +6144,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                     ),
                                   ),
                                   subtitle: Text(
-                                    'pending: ${_pendingCommandApprovals.length}',
+                                    'codex: ${_pendingCodexServerRequests.length} · relay: ${_pendingCommandApprovals.length}',
                                     style: TextStyle(
                                       fontSize: 12,
                                       color: Theme.of(context)
@@ -5863,6 +6197,211 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                         ],
                                       ),
                                     ),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 12, vertical: 4),
+                                      child: Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: Text(
+                                          'Pending Codex requests',
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600,
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurface,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    if (_pendingCodexServerRequests.isEmpty)
+                                      Padding(
+                                        padding: const EdgeInsets.fromLTRB(
+                                            12, 0, 12, 8),
+                                        child: Align(
+                                          alignment: Alignment.centerLeft,
+                                          child: Text(
+                                            '대기 중인 Codex 요청이 없습니다.',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .onSurfaceVariant,
+                                            ),
+                                          ),
+                                        ),
+                                      )
+                                    else
+                                      ..._pendingCodexServerRequests
+                                          .take(5)
+                                          .map((request) {
+                                        final requestId =
+                                            request['requestId']?.toString() ??
+                                                '';
+                                        final requestKind =
+                                            request['requestKind']
+                                                    ?.toString() ??
+                                                '';
+                                        final summary =
+                                            _codexRequestSummary(request);
+                                        final detailLines = List<String>.from(
+                                            (request['detailLines'] as List? ??
+                                                    [])
+                                                .map((e) => e.toString()));
+                                        final choices = List<
+                                                Map<String, dynamic>>.from(
+                                            (request['choices'] as List? ?? [])
+                                                .map((e) =>
+                                                    Map<String, dynamic>.from(
+                                                        e as Map)));
+                                        final isSubmitting =
+                                            _submittingCodexRequestIds
+                                                .contains(requestId);
+
+                                        return Card(
+                                          margin: const EdgeInsets.fromLTRB(
+                                              12, 4, 12, 4),
+                                          elevation: 0,
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(10),
+                                            side: BorderSide(
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .outline
+                                                  .withOpacity(0.2),
+                                            ),
+                                          ),
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(10),
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  _codexRequestTitle(request),
+                                                  style: const TextStyle(
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                                ),
+                                                if (summary.isNotEmpty) ...[
+                                                  const SizedBox(height: 4),
+                                                  Text(
+                                                    summary,
+                                                    style: const TextStyle(
+                                                      fontSize: 11,
+                                                      fontFamily: 'monospace',
+                                                    ),
+                                                  ),
+                                                ],
+                                                if (detailLines.isNotEmpty) ...[
+                                                  const SizedBox(height: 6),
+                                                  ...detailLines.take(3).map(
+                                                        (line) => Padding(
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .only(
+                                                                  bottom: 2),
+                                                          child: Text(
+                                                            line,
+                                                            style: TextStyle(
+                                                              fontSize: 11,
+                                                              color: Theme.of(
+                                                                      context)
+                                                                  .colorScheme
+                                                                  .onSurfaceVariant,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                ],
+                                                const SizedBox(height: 8),
+                                                if (requestKind == 'user_input')
+                                                  Row(
+                                                    children: [
+                                                      Expanded(
+                                                        child: FilledButton(
+                                                          onPressed:
+                                                              isSubmitting
+                                                                  ? null
+                                                                  : () {
+                                                                      _openCodexUserInputDialog(
+                                                                          request);
+                                                                    },
+                                                          child: Text(
+                                                              isSubmitting
+                                                                  ? 'Sending...'
+                                                                  : 'Respond'),
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  )
+                                                else
+                                                  Wrap(
+                                                    spacing: 8,
+                                                    runSpacing: 8,
+                                                    children:
+                                                        choices.map((choice) {
+                                                      final label = choice[
+                                                                  'label']
+                                                              ?.toString() ??
+                                                          'Respond';
+                                                      final style = choice[
+                                                                  'style']
+                                                              ?.toString() ??
+                                                          'secondary';
+                                                      final responsePayload =
+                                                          Map<String,
+                                                                  dynamic>.from(
+                                                              choice['response']
+                                                                      as Map? ??
+                                                                  {});
+                                                      final buttonChild = Text(
+                                                          isSubmitting
+                                                              ? 'Sending...'
+                                                              : label);
+                                                      if (style == 'primary') {
+                                                        return FilledButton(
+                                                          onPressed:
+                                                              isSubmitting
+                                                                  ? null
+                                                                  : () {
+                                                                      _submitCodexDecision(
+                                                                          request,
+                                                                          responsePayload);
+                                                                    },
+                                                          child: buttonChild,
+                                                        );
+                                                      }
+                                                      return OutlinedButton(
+                                                        onPressed: isSubmitting
+                                                            ? null
+                                                            : () {
+                                                                _submitCodexDecision(
+                                                                    request,
+                                                                    responsePayload);
+                                                              },
+                                                        style: style == 'danger'
+                                                            ? OutlinedButton
+                                                                .styleFrom(
+                                                                foregroundColor:
+                                                                    Theme.of(
+                                                                            context)
+                                                                        .colorScheme
+                                                                        .error,
+                                                              )
+                                                            : null,
+                                                        child: buttonChild,
+                                                      );
+                                                    }).toList(),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
+                                        );
+                                      }),
+                                    const Divider(height: 20),
                                     Padding(
                                       padding: const EdgeInsets.symmetric(
                                           horizontal: 12, vertical: 4),

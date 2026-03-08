@@ -102,6 +102,54 @@ export interface CommandApprovalRequest {
   resolution_reason?: string | null;
 }
 
+export type CodexServerRequestKind =
+  | "command_execution"
+  | "file_change"
+  | "user_input";
+
+export interface CodexServerRequestChoice {
+  label: string;
+  style?: "primary" | "secondary" | "danger";
+  response: Record<string, unknown>;
+}
+
+export interface CodexServerRequestMessage {
+  type: "codex_server_request";
+  requestId: string;
+  method: string;
+  requestKind: CodexServerRequestKind;
+  title: string;
+  summary?: string;
+  detailLines?: string[];
+  choices?: CodexServerRequestChoice[];
+  questions?: Array<Record<string, unknown>>;
+  clientId?: string;
+  sessionId?: string;
+  targetDeviceId?: string;
+  timestamp?: string;
+  source?: "codex";
+}
+
+export interface CodexServerRequestResponseMessage {
+  type: "codex_server_request_response";
+  requestId: string;
+  method: string;
+  response: Record<string, unknown>;
+  clientId?: string;
+  timestamp?: string;
+}
+
+export interface CodexServerRequestStatusMessage {
+  type: "codex_server_request_status";
+  requestId: string;
+  method: string;
+  status: "resolved" | "timed_out" | "fallback_to_desktop" | "error";
+  message: string;
+  clientId?: string;
+  targetDeviceId?: string;
+  timestamp?: string;
+}
+
 // Redis 키 패턴
 export const REDIS_KEYS = {
   // 세션 정보
