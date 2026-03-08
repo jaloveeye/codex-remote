@@ -48,6 +48,7 @@ class CodexHandler {
         this.stderrReader = null;
         this.nextRequestId = 1;
         this.pendingRequests = new Map();
+        this.pendingRemoteServerRequests = new Map();
         this.initPromise = null;
         this.initialized = false;
         this.clientThreads = new Map();
@@ -379,11 +380,14 @@ class CodexHandler {
         const directCandidates = [
             objectParams.threadId,
             objectParams.thread_id,
+            objectParams.conversationId,
+            objectParams.sessionId,
             this.getNested(objectParams, "thread", "id"),
             this.getNested(objectParams, "turn", "threadId"),
             this.getNested(objectParams, "turn", "thread_id"),
             this.getNested(objectParams, "item", "threadId"),
             this.getNested(objectParams, "item", "thread_id"),
+            this.getNested(objectParams, "item", "conversationId"),
         ];
         for (const candidate of directCandidates) {
             const parsed = this.safeString(candidate).trim();
@@ -577,6 +581,24 @@ class CodexHandler {
         }
         this.codexProcess.stdin.write(`${JSON.stringify(payload)}\n`);
     }
+    writeJsonRpcResult(id, result) {
+        this.writeJsonRpcMessage({
+            jsonrpc: "2.0",
+            id,
+            result,
+        });
+    }
+    writeJsonRpcError(id, code, message, data) {
+        this.writeJsonRpcMessage({
+            jsonrpc: "2.0",
+            id,
+            error: {
+                code,
+                message,
+                ...(data ? { data } : {}),
+            },
+        });
+    }
     async sendRpcRequestRaw(method, params, timeoutMs = 20000) {
         if (!this.codexProcess) {
             throw new Error("Codex app-server process is not running");
@@ -635,6 +657,10 @@ class CodexHandler {
             this.logError(`Failed to parse codex JSONL line`, error);
             return;
         }
+        if ("id" in parsed && "method" in parsed) {
+            void this.handleServerRequest(parsed);
+            return;
+        }
         if ("id" in parsed) {
             this.handleRpcResponse(parsed);
             return;
@@ -644,6 +670,28 @@ class CodexHandler {
         if (!method)
             return;
         this.handleRpcNotification(method, params);
+    }
+    async handleServerRequest(request) {
+        const requestId = request.id;
+        const method = this.safeString(request.method).trim();
+        const params = request.params;
+        if (!method) {
+            this.writeJsonRpcError(requestId, -32600, "Invalid JSON-RPC request: method is required");
+            return;
+        }
+        this.log(`[CODEX] server request received method=${method}, params=${JSON.stringify(params).substring(0, 400)}`);
+        try {
+            const result = await this.resolveServerRequest(method, params);
+            this.writeJsonRpcResult(requestId, result);
+            this.log(`[CODEX] server request resolved method=${method}`);
+        }
+        catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error || "Unknown error");
+            this.logError(`[CODEX] server request failed method=${method}`, error);
+            this.writeJsonRpcError(requestId, -32000, errorMessage, {
+                method,
+            });
+        }
     }
     handleRpcResponse(response) {
         const rawId = response.id;
@@ -665,6 +713,383 @@ class CodexHandler {
             return;
         }
         pending.resolve(response.result);
+    }
+    async resolveServerRequest(method, params) {
+        switch (method) {
+            case "item/commandExecution/requestApproval":
+                return this.handleCommandExecutionApprovalRequest(params, false);
+            case "execCommandApproval":
+                return this.handleCommandExecutionApprovalRequest(params, true);
+            case "item/fileChange/requestApproval":
+                return this.handleFileChangeApprovalRequest(params, false);
+            case "applyPatchApproval":
+                return this.handleFileChangeApprovalRequest(params, true);
+            case "item/tool/requestUserInput":
+                return this.handleUserInputRequest(params);
+            case "item/tool/call":
+                throw new Error("Dynamic tool calls are not supported by Codex Remote yet.");
+            case "mcpServer/elicitation/request":
+                throw new Error("MCP elicitation requests are not supported by Codex Remote yet.");
+            case "account/chatgptAuthTokens/refresh":
+                throw new Error("ChatGPT auth token refresh must be completed in the local Codex environment.");
+            default:
+                throw new Error(`Unsupported server request method: ${method}`);
+        }
+    }
+    getApprovalClientContext(params) {
+        const clientId = this.resolveClientIdFromParams(params);
+        const state = clientId ? this.clientTurnStates.get(clientId) : null;
+        return {
+            clientId,
+            senderDeviceId: state?.senderDeviceId || null,
+            threadId: this.extractThreadId(params),
+        };
+    }
+    notifyRemoteApprovalStatus(message, params, kind = "info") {
+        if (!this.wsServer)
+            return;
+        const context = this.getApprovalClientContext(params);
+        const payload = kind === "error"
+            ? {
+                type: "error",
+                message,
+                timestamp: new Date().toISOString(),
+                source: "codex",
+                clientId: context.clientId || undefined,
+                sessionId: context.threadId || undefined,
+                targetDeviceId: context.senderDeviceId || undefined,
+            }
+            : {
+                type: "log",
+                level: "warning",
+                message: `[CODEX] ${message}`,
+                timestamp: new Date().toISOString(),
+                source: "codex",
+                clientId: context.clientId || undefined,
+                sessionId: context.threadId || undefined,
+                targetDeviceId: context.senderDeviceId || undefined,
+            };
+        this.wsServer.broadcast(JSON.stringify(payload));
+    }
+    resolveRemoteServerRequestResponse(requestId, method, response) {
+        const normalizedRequestId = requestId.trim();
+        const normalizedMethod = method.trim();
+        if (!normalizedRequestId) {
+            throw new Error("requestId is required");
+        }
+        if (!normalizedMethod) {
+            throw new Error("method is required");
+        }
+        const pending = this.pendingRemoteServerRequests.get(normalizedRequestId);
+        if (!pending) {
+            throw new Error(`No pending mobile request for requestId=${requestId}`);
+        }
+        if (pending.method !== normalizedMethod) {
+            throw new Error(`Method mismatch for requestId=${requestId}: expected ${pending.method}, got ${normalizedMethod}`);
+        }
+        clearTimeout(pending.timeout);
+        this.pendingRemoteServerRequests.delete(normalizedRequestId);
+        pending.resolve(response);
+        this.sendRemoteServerRequestStatus(normalizedRequestId, normalizedMethod, "resolved", "Mobile response received.", pending.clientId, pending.senderDeviceId);
+    }
+    shouldUseRemoteServerRequestFlow(params) {
+        if (!this.wsServer)
+            return false;
+        const context = this.getApprovalClientContext(params);
+        return !!context.senderDeviceId;
+    }
+    sendRemoteServerRequestStatus(requestId, method, status, message, clientId, senderDeviceId) {
+        if (!this.wsServer)
+            return;
+        this.wsServer.send(JSON.stringify({
+            type: "codex_server_request_status",
+            requestId,
+            method,
+            status,
+            message,
+            timestamp: new Date().toISOString(),
+            source: "codex",
+            clientId: clientId || undefined,
+            targetDeviceId: senderDeviceId || undefined,
+        }));
+    }
+    async requestRemoteServerResponse(method, params, requestPayload, timeoutMs = 120000) {
+        if (!this.wsServer) {
+            throw new Error("WebSocket server is not available for remote requests.");
+        }
+        const context = this.getApprovalClientContext(params);
+        if (!context.senderDeviceId) {
+            throw new Error("No remote mobile device is associated with this turn.");
+        }
+        const requestId = `srvreq-${Date.now()}-${Math.random()
+            .toString(36)
+            .slice(2, 8)}`;
+        return await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                this.pendingRemoteServerRequests.delete(requestId);
+                this.sendRemoteServerRequestStatus(requestId, method, "timed_out", "Timed out waiting for a mobile response.", context.clientId, context.senderDeviceId);
+                reject(new Error("Timed out waiting for response from mobile client."));
+            }, timeoutMs);
+            this.pendingRemoteServerRequests.set(requestId, {
+                method,
+                clientId: context.clientId,
+                senderDeviceId: context.senderDeviceId,
+                resolve,
+                reject,
+                timeout,
+            });
+            this.wsServer.send(JSON.stringify({
+                type: "codex_server_request",
+                requestId,
+                method,
+                timestamp: new Date().toISOString(),
+                source: "codex",
+                clientId: context.clientId || undefined,
+                sessionId: context.threadId || undefined,
+                targetDeviceId: context.senderDeviceId,
+                ...requestPayload,
+            }));
+        });
+    }
+    async handleCommandExecutionApprovalRequest(params, legacy) {
+        const objectParams = this.asObject(params) || {};
+        const command = this.safeString(objectParams.command).trim() ||
+            (Array.isArray(objectParams.command)
+                ? objectParams.command
+                    .map((part) => this.safeString(part).trim())
+                    .filter((part) => part.length > 0)
+                    .join(" ")
+                : "") ||
+            "(unknown command)";
+        const cwd = this.safeString(objectParams.cwd).trim();
+        const reason = this.safeString(objectParams.reason).trim();
+        const detailLines = [
+            `Command: ${command}`,
+            cwd ? `cwd: ${cwd}` : null,
+            reason ? `Reason: ${reason}` : null,
+        ].filter((line) => !!line);
+        const allow = "Allow";
+        const allowForSession = "Allow for Session";
+        const deny = "Deny";
+        const availableDecisions = Array.isArray(objectParams.availableDecisions)
+            ? objectParams.availableDecisions.map((decision) => JSON.stringify(decision))
+            : null;
+        const actionItems = [allow, deny];
+        if (legacy ||
+            !availableDecisions ||
+            availableDecisions.includes(JSON.stringify("acceptForSession"))) {
+            actionItems.splice(1, 0, allowForSession);
+        }
+        if (this.shouldUseRemoteServerRequestFlow(params)) {
+            const remoteChoices = [
+                {
+                    label: allow,
+                    style: "primary",
+                    response: {
+                        decision: legacy ? "approved" : "accept",
+                    },
+                },
+                {
+                    label: deny,
+                    style: "danger",
+                    response: {
+                        decision: legacy ? "denied" : "decline",
+                    },
+                },
+            ];
+            if (actionItems.includes(allowForSession)) {
+                remoteChoices.splice(1, 0, {
+                    label: allowForSession,
+                    style: "secondary",
+                    response: {
+                        decision: legacy ? "approved_for_session" : "acceptForSession",
+                    },
+                });
+            }
+            try {
+                return await this.requestRemoteServerResponse(legacy ? "execCommandApproval" : "item/commandExecution/requestApproval", params, {
+                    requestKind: "command_execution",
+                    title: "Codex wants to run a command",
+                    summary: command,
+                    detailLines,
+                    choices: remoteChoices,
+                });
+            }
+            catch (error) {
+                this.notifyRemoteApprovalStatus("Mobile approval did not complete in time. Falling back to VS Code desktop.", params, "error");
+            }
+        }
+        this.notifyRemoteApprovalStatus("Approval required in VS Code desktop for command execution.", params);
+        const selection = await vscode.window.showWarningMessage("Codex wants to run a command. Allow this execution?", {
+            modal: true,
+            detail: detailLines.join("\n"),
+        }, ...actionItems);
+        if (legacy) {
+            if (selection === allow)
+                return { decision: "approved" };
+            if (selection === allowForSession) {
+                return { decision: "approved_for_session" };
+            }
+            if (selection === deny)
+                return { decision: "denied" };
+            return { decision: "abort" };
+        }
+        if (selection === allow)
+            return { decision: "accept" };
+        if (selection === allowForSession)
+            return { decision: "acceptForSession" };
+        if (selection === deny)
+            return { decision: "decline" };
+        return { decision: "cancel" };
+    }
+    async handleFileChangeApprovalRequest(params, legacy) {
+        const objectParams = this.asObject(params) || {};
+        const reason = this.safeString(objectParams.reason).trim();
+        const grantRoot = this.safeString(objectParams.grantRoot).trim() ||
+            this.safeString(objectParams.grant_root).trim();
+        const changedFiles = this.asObject(objectParams.changes) ||
+            this.asObject(objectParams.fileChanges);
+        const changeCount = changedFiles ? Object.keys(changedFiles).length : null;
+        const detailLines = [
+            changeCount != null ? `Files: ${changeCount}` : null,
+            grantRoot ? `Grant root: ${grantRoot}` : null,
+            reason ? `Reason: ${reason}` : null,
+        ].filter((line) => !!line);
+        const allow = "Allow";
+        const allowForSession = "Allow for Session";
+        const deny = "Deny";
+        if (this.shouldUseRemoteServerRequestFlow(params)) {
+            const remoteChoices = [
+                {
+                    label: allow,
+                    style: "primary",
+                    response: {
+                        decision: legacy ? "approved" : "accept",
+                    },
+                },
+                {
+                    label: allowForSession,
+                    style: "secondary",
+                    response: {
+                        decision: legacy ? "approved_for_session" : "acceptForSession",
+                    },
+                },
+                {
+                    label: deny,
+                    style: "danger",
+                    response: {
+                        decision: legacy ? "denied" : "decline",
+                    },
+                },
+            ];
+            try {
+                return await this.requestRemoteServerResponse(legacy ? "applyPatchApproval" : "item/fileChange/requestApproval", params, {
+                    requestKind: "file_change",
+                    title: "Codex wants to modify files",
+                    summary: changeCount != null
+                        ? `${changeCount} file(s) will be changed`
+                        : "Codex requested file changes",
+                    detailLines,
+                    choices: remoteChoices,
+                });
+            }
+            catch (error) {
+                this.notifyRemoteApprovalStatus("Mobile file approval did not complete in time. Falling back to VS Code desktop.", params, "error");
+            }
+        }
+        this.notifyRemoteApprovalStatus("Approval required in VS Code desktop for file changes.", params);
+        const selection = await vscode.window.showWarningMessage("Codex wants to modify files. Allow these file changes?", {
+            modal: true,
+            detail: detailLines.join("\n"),
+        }, allow, allowForSession, deny);
+        if (legacy) {
+            if (selection === allow)
+                return { decision: "approved" };
+            if (selection === allowForSession) {
+                return { decision: "approved_for_session" };
+            }
+            if (selection === deny)
+                return { decision: "denied" };
+            return { decision: "abort" };
+        }
+        if (selection === allow)
+            return { decision: "accept" };
+        if (selection === allowForSession)
+            return { decision: "acceptForSession" };
+        if (selection === deny)
+            return { decision: "decline" };
+        return { decision: "cancel" };
+    }
+    async handleUserInputRequest(params) {
+        const objectParams = this.asObject(params) || {};
+        const rawQuestions = Array.isArray(objectParams.questions)
+            ? objectParams.questions
+            : [];
+        if (rawQuestions.length === 0) {
+            throw new Error("requestUserInput received without questions");
+        }
+        if (this.shouldUseRemoteServerRequestFlow(params)) {
+            try {
+                return await this.requestRemoteServerResponse("item/tool/requestUserInput", params, {
+                    requestKind: "user_input",
+                    title: "Codex needs more input",
+                    summary: `${rawQuestions.length} additional question(s)`,
+                    questions: rawQuestions,
+                    choices: [],
+                });
+            }
+            catch (error) {
+                this.notifyRemoteApprovalStatus("Mobile user input was not completed in time. Falling back to VS Code desktop.", params, "error");
+            }
+        }
+        this.notifyRemoteApprovalStatus("Codex is asking for additional user input in VS Code desktop.", params);
+        const answers = {};
+        for (const rawQuestion of rawQuestions) {
+            const question = this.asObject(rawQuestion) || {};
+            const id = this.safeString(question.id).trim();
+            const header = this.safeString(question.header).trim() || "Input required";
+            const prompt = this.safeString(question.question).trim() ||
+                "Provide the requested input.";
+            const isSecret = question.isSecret === true;
+            const options = Array.isArray(question.options)
+                ? question.options
+                    .map((option) => this.asObject(option) || {})
+                    .map((option) => ({
+                    label: this.safeString(option.label).trim(),
+                    description: this.safeString(option.description).trim(),
+                }))
+                    .filter((option) => option.label.length > 0)
+                : [];
+            if (!id) {
+                throw new Error("requestUserInput question is missing id");
+            }
+            if (options.length > 0) {
+                const picked = await vscode.window.showQuickPick(options.map((option) => ({
+                    label: option.label,
+                    description: option.description,
+                })), {
+                    title: header,
+                    placeHolder: prompt,
+                    ignoreFocusOut: true,
+                });
+                if (!picked) {
+                    throw new Error(`User cancelled input request: ${header}`);
+                }
+                answers[id] = { answers: [picked.label] };
+                continue;
+            }
+            const input = await vscode.window.showInputBox({
+                title: header,
+                prompt,
+                ignoreFocusOut: true,
+                password: isSecret,
+            });
+            if (input == null) {
+                throw new Error(`User cancelled input request: ${header}`);
+            }
+            answers[id] = { answers: [input] };
+        }
+        return { answers };
     }
     handleRpcNotification(method, params) {
         const normalized = method.toLowerCase();

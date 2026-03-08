@@ -229,6 +229,22 @@ export class CommandHandler {
     return await vscode.commands.executeCommand(command, ...args);
   }
 
+  async resolveCodexServerRequestResponse(
+    requestId: string,
+    method: string,
+    response: Record<string, unknown>
+  ): Promise<void> {
+    if (!this.codexHandler) {
+      throw new Error("Codex handler is not initialized.");
+    }
+
+    this.codexHandler.resolveRemoteServerRequestResponse(
+      requestId,
+      method,
+      response
+    );
+  }
+
   async getActiveFile(): Promise<{ path: string; content: string } | null> {
     const editor = vscode.window.activeTextEditor;
     if (!editor || !editor.document) {
