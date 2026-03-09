@@ -1225,25 +1225,17 @@ export class CodexHandler {
         });
       }
 
-      try {
-        return await this.requestRemoteServerResponse(
-          legacy ? "execCommandApproval" : "item/commandExecution/requestApproval",
-          params,
-          {
-            requestKind: "command_execution",
-            title: "Codex wants to run a command",
-            summary: command,
-            detailLines,
-            choices: remoteChoices,
-          }
-        );
-      } catch (error) {
-        this.notifyRemoteApprovalStatus(
-          "Mobile approval did not complete in time. Falling back to VS Code desktop.",
-          params,
-          "error"
-        );
-      }
+      return await this.requestRemoteServerResponse(
+        legacy ? "execCommandApproval" : "item/commandExecution/requestApproval",
+        params,
+        {
+          requestKind: "command_execution",
+          title: "Codex wants to run a command",
+          summary: command,
+          detailLines,
+          choices: remoteChoices,
+        }
+      );
     }
 
     this.notifyRemoteApprovalStatus(
@@ -1324,28 +1316,20 @@ export class CodexHandler {
         },
       ];
 
-      try {
-        return await this.requestRemoteServerResponse(
-          legacy ? "applyPatchApproval" : "item/fileChange/requestApproval",
-          params,
-          {
-            requestKind: "file_change",
-            title: "Codex wants to modify files",
-            summary:
-              changeCount != null
-                ? `${changeCount} file(s) will be changed`
-                : "Codex requested file changes",
-            detailLines,
-            choices: remoteChoices,
-          }
-        );
-      } catch (error) {
-        this.notifyRemoteApprovalStatus(
-          "Mobile file approval did not complete in time. Falling back to VS Code desktop.",
-          params,
-          "error"
-        );
-      }
+      return await this.requestRemoteServerResponse(
+        legacy ? "applyPatchApproval" : "item/fileChange/requestApproval",
+        params,
+        {
+          requestKind: "file_change",
+          title: "Codex wants to modify files",
+          summary:
+            changeCount != null
+              ? `${changeCount} file(s) will be changed`
+              : "Codex requested file changes",
+          detailLines,
+          choices: remoteChoices,
+        }
+      );
     }
 
     this.notifyRemoteApprovalStatus(
@@ -1392,25 +1376,17 @@ export class CodexHandler {
     }
 
     if (this.shouldUseRemoteServerRequestFlow(params)) {
-      try {
-        return await this.requestRemoteServerResponse(
-          "item/tool/requestUserInput",
-          params,
-          {
-            requestKind: "user_input",
-            title: "Codex needs more input",
-            summary: `${rawQuestions.length} additional question(s)`,
-            questions: rawQuestions,
-            choices: [],
-          }
-        );
-      } catch (error) {
-        this.notifyRemoteApprovalStatus(
-          "Mobile user input was not completed in time. Falling back to VS Code desktop.",
-          params,
-          "error"
-        );
-      }
+      return await this.requestRemoteServerResponse(
+        "item/tool/requestUserInput",
+        params,
+        {
+          requestKind: "user_input",
+          title: "Codex needs more input",
+          summary: `${rawQuestions.length} additional question(s)`,
+          questions: rawQuestions,
+          choices: [],
+        }
+      );
     }
 
     this.notifyRemoteApprovalStatus(
@@ -1745,7 +1721,7 @@ export class CodexHandler {
       {
         clientInfo: {
           name: "codex-remote-extension",
-          version: "0.4.5",
+          version: "0.1.5",
         },
         capabilities: {},
       },

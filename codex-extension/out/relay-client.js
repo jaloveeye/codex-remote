@@ -267,8 +267,20 @@ class RelayClient {
                 // Forward message to callback (Extension WebSocket server)
                 if (this.onMessageCallback) {
                     // 페이로드: msg.data가 있으면 그대로, 없으면 전체 msg (하위 호환)
-                    // 0.3.3 동작: 유니캐스트 없이 브로드캐스트만 사용
-                    const payload = msg.data !== undefined && msg.data !== null ? msg.data : msg;
+                    // 릴레이 envelope 메타데이터(sender/target device id)는
+                    // 원본 payload에 없더라도 유지해서 원격 승인/응답 라우팅에 사용한다.
+                    const basePayload = msg.data !== undefined && msg.data !== null ? msg.data : msg;
+                    const payload = basePayload &&
+                        typeof basePayload === "object" &&
+                        !Array.isArray(basePayload)
+                        ? {
+                            ...basePayload,
+                            senderDeviceId: basePayload.senderDeviceId ??
+                                msg.senderDeviceId,
+                            targetDeviceId: basePayload.targetDeviceId ??
+                                msg.targetDeviceId,
+                        }
+                        : basePayload;
                     const messageStr = typeof payload === "string" ? payload : JSON.stringify(payload);
                     this.log(`📤 Calling onMessageCallback with: ${messageStr.substring(0, 200)}`);
                     this.onMessageCallback(messageStr);

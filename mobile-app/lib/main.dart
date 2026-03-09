@@ -431,6 +431,12 @@ enum LogLevel {
   info, // 정보
 }
 
+enum AutoDecisionMode {
+  off,
+  approve,
+  reject,
+}
+
 class MessageItem {
   final String text;
   final String type; // MessageType 상수 사용
@@ -494,6 +500,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   List<Map<String, dynamic>> _pendingCommandApprovals = [];
   List<Map<String, dynamic>> _pendingCodexServerRequests = [];
   List<Map<String, dynamic>> _recentCommandEvents = [];
+  final Set<String> _seenCommandApprovalIds = <String>{};
+  final Set<String> _seenCodexRequestIds = <String>{};
+  AutoDecisionMode _autoDecisionMode = AutoDecisionMode.off;
+  int _autoDecisionTimeoutSec = 30;
+  final Map<String, Timer> _autoDecisionTimers = <String, Timer>{};
   bool _loadingCommandApprovals = false;
   bool _loadingCommandEvents = false;
   final Set<String> _submittingCodexRequestIds = <String>{};
@@ -2123,6 +2134,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   void _disconnect() {
     _stopPolling();
+    _cancelAllAutoDecisionTimers();
     _stopReconnect(); // 재연결 중지
     _capabilitiesLoadTimer?.cancel();
 
@@ -2242,6 +2254,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
 
     try {
+      if (_deviceId.isEmpty) {
+        _deviceId = 'mobile-${DateTime.now().millisecondsSinceEpoch}';
+      }
+
       // agentMode가 제공되지 않으면 선택된 모드 사용 (또는 auto)
       final mode = agentMode ?? 'auto';
       // model/reasoning이 제공되지 않으면 현재 선택값 사용
@@ -2279,6 +2295,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final commandData = {
         'type': type,
         'id': DateTime.now().millisecondsSinceEpoch.toString(),
+        'senderDeviceId': _deviceId,
         if (text != null) 'text': text,
         if (command != null) 'command': command,
         if (args != null) 'args': args,
@@ -3157,6 +3174,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
         setState(() {
           _pendingCommandApprovals = approvals;
+          for (final approval in approvals) {
+            final approvalId = approval['approval_id']?.toString() ?? '';
+            if (approvalId.isEmpty ||
+                _seenCommandApprovalIds.contains(approvalId)) {
+              continue;
+            }
+
+            _seenCommandApprovalIds.add(approvalId);
+            final policy = approval['policy'] as Map<String, dynamic>? ?? {};
+            final riskLevel = policy['risk_level']?.toString() ?? 'unknown';
+            final commandRaw = _truncateForLog(_approvalCommandRaw(approval));
+
+            _messages.add(MessageItem(
+                '🔐 승인 요청 도착: $approvalId · $commandRaw (risk: $riskLevel)',
+                type: MessageType.system));
+          }
           _loadingCommandApprovals = false;
         });
 
@@ -3190,6 +3223,395 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _scrollToBottom();
       }
     }
+  }
+
+  String _truncateForLog(String value, {int maxLength = 72}) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return '';
+    if (trimmed.length <= maxLength) return trimmed;
+    return '${trimmed.substring(0, maxLength)}…';
+  }
+
+  String _approvalCommandRaw(Map<String, dynamic> approval) {
+    final commandMessage =
+        approval['command_message'] as Map<String, dynamic>? ?? {};
+    final commandData = commandMessage['data'] as Map<String, dynamic>? ?? {};
+    return commandData['command']?.toString() ?? '(unknown)';
+  }
+
+  String _describeDecisionPayload(Map<String, dynamic> responsePayload) {
+    const candidateKeys = ['decision', 'action', 'status', 'choice', 'result'];
+    for (final key in candidateKeys) {
+      final value = responsePayload[key]?.toString().trim() ?? '';
+      if (value.isNotEmpty) return value;
+    }
+
+    if (responsePayload.containsKey('answers')) {
+      return 'answers_submitted';
+    }
+
+    if (responsePayload.isEmpty) return 'submitted';
+    return _truncateForLog(jsonEncode(responsePayload), maxLength: 56);
+  }
+
+  String _autoDecisionModeLabel(AutoDecisionMode mode) {
+    switch (mode) {
+      case AutoDecisionMode.approve:
+        return 'auto-approve';
+      case AutoDecisionMode.reject:
+        return 'auto-reject';
+      case AutoDecisionMode.off:
+        return 'manual';
+    }
+  }
+
+  void _cancelAutoDecisionTimer(String requestId) {
+    final timer = _autoDecisionTimers.remove(requestId);
+    timer?.cancel();
+  }
+
+  void _cancelAllAutoDecisionTimers() {
+    for (final timer in _autoDecisionTimers.values) {
+      timer.cancel();
+    }
+    _autoDecisionTimers.clear();
+  }
+
+  DateTime? _parseTimestampValue(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is int) {
+      return DateTime.fromMillisecondsSinceEpoch(raw);
+    }
+    if (raw is String) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) return null;
+      final asInt = int.tryParse(trimmed);
+      if (asInt != null) {
+        return DateTime.fromMillisecondsSinceEpoch(asInt);
+      }
+      return DateTime.tryParse(trimmed);
+    }
+    return null;
+  }
+
+  String _timestampLabelFromMap(Map<String, dynamic> payload,
+      {List<String> preferredKeys = const [
+        'created_at',
+        'createdAt',
+        'timestamp',
+        'resolved_at',
+        'resolvedAt'
+      ]}) {
+    for (final key in preferredKeys) {
+      final parsed = _parseTimestampValue(payload[key]);
+      if (parsed != null) return _formatTime(parsed);
+    }
+    return '-';
+  }
+
+  Map<String, dynamic>? _pickAutoDecisionPayload(Map<String, dynamic> request) {
+    final choices = List<Map<String, dynamic>>.from(
+        (request['choices'] as List? ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map)));
+    if (choices.isEmpty) return null;
+
+    final wantsApprove = _autoDecisionMode == AutoDecisionMode.approve;
+    final positiveKeywords = <String>[
+      'approve',
+      'allow',
+      'accept',
+      'continue',
+      'proceed',
+      'yes'
+    ];
+    final negativeKeywords = <String>[
+      'reject',
+      'deny',
+      'block',
+      'cancel',
+      'decline',
+      'no'
+    ];
+
+    bool matches(Map<String, dynamic> choice, List<String> keywords) {
+      final label = choice['label']?.toString().toLowerCase() ?? '';
+      final style = choice['style']?.toString().toLowerCase() ?? '';
+      final response =
+          Map<String, dynamic>.from(choice['response'] as Map? ?? {});
+      final responseText = [
+        response['decision'],
+        response['action'],
+        response['status'],
+        response['result']
+      ].where((e) => e != null).join(' ').toLowerCase();
+      final haystack = '$label $style $responseText';
+      return keywords.any((kw) => haystack.contains(kw));
+    }
+
+    final exact = choices.where((choice) {
+      if (wantsApprove) return matches(choice, positiveKeywords);
+      return matches(choice, negativeKeywords);
+    }).toList();
+    if (exact.isNotEmpty) {
+      return Map<String, dynamic>.from(exact.first['response'] as Map? ?? {});
+    }
+
+    if (wantsApprove) {
+      final primary = choices.firstWhere(
+          (choice) => choice['style']?.toString().toLowerCase() == 'primary',
+          orElse: () => choices.first);
+      return Map<String, dynamic>.from(primary['response'] as Map? ?? {});
+    }
+
+    final danger = choices.firstWhere(
+        (choice) => choice['style']?.toString().toLowerCase() == 'danger',
+        orElse: () => choices.last);
+    return Map<String, dynamic>.from(danger['response'] as Map? ?? {});
+  }
+
+  void _scheduleAutoDecisionForCodexRequest(Map<String, dynamic> request) {
+    if (_autoDecisionMode == AutoDecisionMode.off) return;
+
+    final requestId = request['requestId']?.toString() ?? '';
+    if (requestId.isEmpty) return;
+
+    final requestKind = request['requestKind']?.toString() ?? '';
+    if (requestKind == 'user_input') return;
+
+    _cancelAutoDecisionTimer(requestId);
+    _autoDecisionTimers[requestId] =
+        Timer(Duration(seconds: _autoDecisionTimeoutSec), () async {
+      if (!mounted) return;
+
+      final stillPending = _pendingCodexServerRequests
+          .any((item) => item['requestId']?.toString() == requestId);
+      if (!stillPending) {
+        _cancelAutoDecisionTimer(requestId);
+        return;
+      }
+
+      final autoPayload = _pickAutoDecisionPayload(request);
+      final modeLabel = _autoDecisionModeLabel(_autoDecisionMode);
+      if (autoPayload == null) {
+        setState(() {
+          _messages.add(MessageItem('⚠️ $requestId 자동 응답 실패: 선택 가능한 응답이 없습니다.',
+              type: MessageType.system));
+        });
+        _scrollToBottom();
+        _cancelAutoDecisionTimer(requestId);
+        return;
+      }
+
+      setState(() {
+        _messages.add(MessageItem(
+            '⏱️ ${_autoDecisionTimeoutSec}초 무응답 → $modeLabel 실행',
+            type: MessageType.system));
+      });
+      _scrollToBottom();
+      _cancelAutoDecisionTimer(requestId);
+      await _submitCodexDecision(request, autoPayload);
+    });
+  }
+
+  Future<void> _confirmAndResolveApproval(
+      Map<String, dynamic> approval, String action) async {
+    final approvalId = approval['approval_id']?.toString() ?? '';
+    if (approvalId.isEmpty) return;
+
+    final policy = approval['policy'] as Map<String, dynamic>? ?? {};
+    final riskLevel =
+        policy['risk_level']?.toString().toLowerCase().trim() ?? 'unknown';
+    final commandRaw = _approvalCommandRaw(approval);
+    final isHighRisk = riskLevel == 'high' || riskLevel == 'critical';
+
+    if (action == 'approve' && isHighRisk && mounted) {
+      final confirmed = await showDialog<bool>(
+            context: context,
+            builder: (dialogContext) => AlertDialog(
+              title: const Text('고위험 명령 승인 확인'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('risk: $riskLevel'),
+                  const SizedBox(height: 8),
+                  SelectableText(
+                    _truncateForLog(commandRaw, maxLength: 240),
+                    style: const TextStyle(fontFamily: 'monospace'),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('취소'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                  child: const Text('그래도 승인'),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+      if (!confirmed) {
+        setState(() {
+          _messages.add(MessageItem('🛑 고위험 승인 취소: $approvalId',
+              type: MessageType.system));
+        });
+        _scrollToBottom();
+        return;
+      }
+    }
+
+    await _resolveCommandApproval(approvalId, action);
+  }
+
+  Future<void> _showRelayApprovalDetailSheet(
+      Map<String, dynamic> approval) async {
+    if (!mounted) return;
+
+    final approvalId = approval['approval_id']?.toString() ?? '(unknown)';
+    final commandRaw = _approvalCommandRaw(approval);
+    final policy = approval['policy'] as Map<String, dynamic>? ?? {};
+    final riskLevel = policy['risk_level']?.toString() ?? 'unknown';
+    final reasons = List<String>.from(
+        (policy['reasons'] as List? ?? []).map((e) => e.toString()));
+    final createdAt = _timestampLabelFromMap(approval);
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        final scheme = Theme.of(sheetContext).colorScheme;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Approval detail',
+                      style: Theme.of(sheetContext)
+                          .textTheme
+                          .titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 8),
+                  Text('ID: $approvalId',
+                      style: TextStyle(fontSize: 12, color: scheme.onSurface)),
+                  Text('Created: $createdAt',
+                      style: TextStyle(
+                          fontSize: 12, color: scheme.onSurfaceVariant)),
+                  const SizedBox(height: 12),
+                  Text(
+                    commandRaw,
+                    style:
+                        const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  Text('Risk: $riskLevel',
+                      style: TextStyle(
+                          color: _riskColor(riskLevel),
+                          fontWeight: FontWeight.w700)),
+                  if (reasons.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    ...reasons.map((reason) => Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text('• $reason',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: scheme.onSurfaceVariant)),
+                        )),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showCodexRequestDetailSheet(
+      Map<String, dynamic> request) async {
+    if (!mounted) return;
+
+    final requestId = request['requestId']?.toString() ?? '(unknown)';
+    final summary = _codexRequestSummary(request);
+    final detailLines = List<String>.from(
+        (request['detailLines'] as List? ?? []).map((e) => e.toString()));
+    final choices = List<Map<String, dynamic>>.from(
+        (request['choices'] as List? ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map)));
+    final timestamp = _timestampLabelFromMap(request,
+        preferredKeys: const ['timestamp', 'created_at', 'createdAt']);
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        final scheme = Theme.of(sheetContext).colorScheme;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(_codexRequestTitle(request),
+                      style: Theme.of(sheetContext)
+                          .textTheme
+                          .titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 8),
+                  Text('ID: $requestId',
+                      style: TextStyle(fontSize: 12, color: scheme.onSurface)),
+                  Text('Time: $timestamp',
+                      style: TextStyle(
+                          fontSize: 12, color: scheme.onSurfaceVariant)),
+                  if (summary.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    SelectableText(summary,
+                        style: const TextStyle(
+                            fontFamily: 'monospace', fontSize: 12)),
+                  ],
+                  if (detailLines.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    ...detailLines.map((line) => Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text(line,
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: scheme.onSurfaceVariant)),
+                        )),
+                  ],
+                  if (choices.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text('Choices',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: scheme.onSurface)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: choices
+                          .map((choice) => Chip(
+                                label: Text(choice['label']?.toString() ?? '-'),
+                              ))
+                          .toList(),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _loadCommandEvents({int limit = 20, bool silent = false}) async {
@@ -3257,6 +3679,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (!_isConnected || _sessionId == null) return;
     if (_connectionType != ConnectionType.relay) return;
 
+    Map<String, dynamic>? approvalSnapshot;
+    for (final approval in _pendingCommandApprovals) {
+      if (approval['approval_id']?.toString() == approvalId) {
+        approvalSnapshot = approval;
+        break;
+      }
+    }
+    final commandRaw = approvalSnapshot != null
+        ? _truncateForLog(_approvalCommandRaw(approvalSnapshot), maxLength: 54)
+        : '';
+
     try {
       final response = await http.post(
         _relayUri('/api/resolve-command-approval'),
@@ -3279,7 +3712,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             (body['data'] as Map<String, dynamic>? ?? {})['status'] ?? action;
         setState(() {
           _messages.add(MessageItem(
-              '✅ Approval resolved: $approvalId → $status',
+              '✅ Approval 응답: $approvalId → $status${commandRaw.isNotEmpty ? ' · $commandRaw' : ''}',
               type: MessageType.system));
         });
         ScaffoldMessenger.of(context).showSnackBar(
@@ -3291,7 +3724,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       } else {
         setState(() {
           _messages.add(MessageItem(
-              '❌ Approval 처리 실패: ${body['error'] ?? 'HTTP ${response.statusCode}'}',
+              '❌ Approval 처리 실패($action): ${body['error'] ?? 'HTTP ${response.statusCode}'}',
               type: MessageType.system));
         });
         _scrollToBottom();
@@ -3304,6 +3737,23 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       });
       _scrollToBottom();
     }
+  }
+
+  void _markRelayApprovalLater(Map<String, dynamic> approval) {
+    final approvalId = approval['approval_id']?.toString() ?? '(unknown)';
+    final commandRaw =
+        _truncateForLog(_approvalCommandRaw(approval), maxLength: 54);
+
+    if (!mounted) return;
+    setState(() {
+      _messages.add(MessageItem(
+          '🕒 Approval 보류(Later): $approvalId${commandRaw.isNotEmpty ? ' · $commandRaw' : ''}',
+          type: MessageType.system));
+    });
+    _scrollToBottom();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('승인 요청을 나중에 처리하도록 남겨뒀어요.')),
+    );
   }
 
   bool _isTargetedToThisMobile(Map<String, dynamic> payload) {
@@ -3329,6 +3779,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _pendingCodexServerRequests
         .removeWhere((item) => item['requestId']?.toString() == requestId);
     _submittingCodexRequestIds.remove(requestId);
+    _cancelAutoDecisionTimer(requestId);
   }
 
   String _codexRequestTitle(Map<String, dynamic> request) {
@@ -3354,6 +3805,174 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return detailLines.isNotEmpty ? detailLines.first : '';
   }
 
+  Color _codexRequestAccentColor(
+      BuildContext context, Map<String, dynamic> request) {
+    final kind = request['requestKind']?.toString() ?? '';
+    final scheme = Theme.of(context).colorScheme;
+    switch (kind) {
+      case 'command_execution':
+      case 'file_change':
+        return scheme.error;
+      case 'user_input':
+        return scheme.tertiary;
+      default:
+        return scheme.primary;
+    }
+  }
+
+  Future<void> _showCodexServerRequestDialog(
+      Map<String, dynamic> request) async {
+    if (!mounted) return;
+
+    final requestId = request['requestId']?.toString() ?? '';
+    if (requestId.isEmpty) return;
+
+    final requestKind = request['requestKind']?.toString() ?? '';
+    final summary = _codexRequestSummary(request);
+    final detailLines = List<String>.from(
+        (request['detailLines'] as List? ?? []).map((e) => e.toString()));
+    final choices = List<Map<String, dynamic>>.from(
+        (request['choices'] as List? ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map)));
+
+    bool decisionSubmitted = false;
+    bool deferredByLaterButton = false;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) {
+        final accentColor = _codexRequestAccentColor(dialogContext, request);
+        final scheme = Theme.of(dialogContext).colorScheme;
+
+        return AlertDialog(
+          icon: Icon(Icons.notification_important_rounded,
+              color: accentColor, size: 32),
+          title: Text(_codexRequestTitle(request)),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: accentColor.withOpacity(0.10),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: accentColor.withOpacity(0.28)),
+                  ),
+                  child: Text(
+                    '모바일에서 선택해야 Codex가 계속 진행됩니다.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: accentColor,
+                    ),
+                  ),
+                ),
+                if (_autoDecisionMode != AutoDecisionMode.off &&
+                    requestKind != 'user_input') ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    '응답이 ${_autoDecisionTimeoutSec}초 없으면 ${_autoDecisionModeLabel(_autoDecisionMode)}가 실행됩니다.',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+                if (summary.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  SelectableText(
+                    summary,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+                if (detailLines.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  ...detailLines.map(
+                    (line) => Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Text(
+                        line,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                deferredByLaterButton = true;
+                Navigator.of(dialogContext).pop();
+              },
+              child: const Text('Later'),
+            ),
+            if (requestKind == 'user_input')
+              FilledButton(
+                onPressed: () {
+                  decisionSubmitted = true;
+                  Navigator.of(dialogContext).pop();
+                  _openCodexUserInputDialog(request);
+                },
+                child: const Text('Respond now'),
+              )
+            else
+              ...choices.map((choice) {
+                final label = choice['label']?.toString() ?? 'Respond';
+                final style = choice['style']?.toString() ?? 'secondary';
+                final responsePayload =
+                    Map<String, dynamic>.from(choice['response'] as Map? ?? {});
+                final onPressed = () {
+                  decisionSubmitted = true;
+                  Navigator.of(dialogContext).pop();
+                  _submitCodexDecision(request, responsePayload);
+                };
+
+                if (style == 'primary') {
+                  return FilledButton(
+                    onPressed: onPressed,
+                    child: Text(label),
+                  );
+                }
+
+                return OutlinedButton(
+                  onPressed: onPressed,
+                  style: style == 'danger'
+                      ? OutlinedButton.styleFrom(
+                          foregroundColor: scheme.error,
+                        )
+                      : null,
+                  child: Text(label),
+                );
+              }),
+          ],
+        );
+      },
+    );
+
+    if (!mounted || decisionSubmitted) return;
+    final deferredReason = deferredByLaterButton ? 'later' : 'dismissed';
+    setState(() {
+      _messages.add(MessageItem(
+          '🕒 ${_codexRequestTitle(request)} 보류됨 ($deferredReason)',
+          type: MessageType.system));
+    });
+    _scrollToBottom();
+  }
+
   Future<void> _handleCodexServerRequest(Map<String, dynamic> payload) async {
     if (!_isTargetedToThisMobile(payload)) return;
 
@@ -3363,18 +3982,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() {
       _upsertPendingCodexServerRequest(payload);
-      _messages.add(MessageItem('📲 ${_codexRequestTitle(payload)} — 모바일 응답 필요',
-          type: MessageType.system));
+      if (_seenCodexRequestIds.add(requestId)) {
+        final summary =
+            _truncateForLog(_codexRequestSummary(payload), maxLength: 56);
+        _messages.add(MessageItem(
+            '📩 ${_codexRequestTitle(payload)} 요청 도착${summary.isNotEmpty ? ' · $summary' : ''}',
+            type: MessageType.system));
+      }
       _isWaitingForResponse = false;
     });
     _scrollToBottom();
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(_codexRequestTitle(payload)),
-        duration: const Duration(seconds: 3),
-      ),
-    );
+    HapticFeedback.heavyImpact();
+    _scheduleAutoDecisionForCodexRequest(payload);
+    unawaited(_showCodexServerRequestDialog(payload));
   }
 
   void _handleCodexServerRequestStatus(Map<String, dynamic> payload) {
@@ -3387,10 +4007,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     setState(() {
       _removePendingCodexServerRequest(requestId);
-      if (message.isNotEmpty) {
-        _messages.add(MessageItem('ℹ️ ${_codexRequestTitle(payload)}: $message',
-            type: MessageType.system));
-      }
+      final statusText = message.isNotEmpty ? message : status;
+      _messages.add(MessageItem(
+          'ℹ️ ${_codexRequestTitle(payload)} 상태: $statusText',
+          type: MessageType.system));
     });
     _scrollToBottom();
 
@@ -3459,6 +4079,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       Map<String, dynamic> responsePayload) async {
     final requestId = request['requestId']?.toString() ?? '';
     if (requestId.isEmpty || !mounted) return;
+    _cancelAutoDecisionTimer(requestId);
+    final decisionLabel = _describeDecisionPayload(responsePayload);
 
     setState(() {
       _submittingCodexRequestIds.add(requestId);
@@ -3469,7 +4091,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (!mounted) return;
       setState(() {
         _removePendingCodexServerRequest(requestId);
-        _messages.add(MessageItem('✅ ${_codexRequestTitle(request)} 응답 전송됨',
+        _messages.add(MessageItem(
+            '✅ ${_codexRequestTitle(request)} 응답 전송됨 → $decisionLabel',
             type: MessageType.system));
       });
       _scrollToBottom();
@@ -3477,7 +4100,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (!mounted) return;
       setState(() {
         _submittingCodexRequestIds.remove(requestId);
-        _messages.add(MessageItem('❌ 요청 응답 실패: $e', type: MessageType.system));
+        _messages.add(MessageItem('❌ 요청 응답 실패($decisionLabel): $e',
+            type: MessageType.system));
       });
       _scrollToBottom();
       ScaffoldMessenger.of(context).showSnackBar(
@@ -6172,7 +6796,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                     Padding(
                                       padding: const EdgeInsets.symmetric(
                                           horizontal: 12, vertical: 8),
-                                      child: Row(
+                                      child: Wrap(
                                         children: [
                                           OutlinedButton.icon(
                                             onPressed: _isConnected
@@ -6184,6 +6808,77 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                             icon: const Icon(Icons.refresh,
                                                 size: 16),
                                             label: const Text('새로고침'),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          PopupMenuButton<AutoDecisionMode>(
+                                            tooltip: 'Auto response mode',
+                                            onSelected: (mode) {
+                                              setState(() {
+                                                _autoDecisionMode = mode;
+                                              });
+                                              final label =
+                                                  _autoDecisionModeLabel(mode);
+                                              _messages.add(MessageItem(
+                                                  '⚙️ 승인 자동응답 모드: $label',
+                                                  type: MessageType.system));
+                                              _scrollToBottom();
+                                            },
+                                            itemBuilder: (context) => const [
+                                              PopupMenuItem(
+                                                value: AutoDecisionMode.off,
+                                                child: Text('Manual'),
+                                              ),
+                                              PopupMenuItem(
+                                                value: AutoDecisionMode.approve,
+                                                child: Text('Auto-approve'),
+                                              ),
+                                              PopupMenuItem(
+                                                value: AutoDecisionMode.reject,
+                                                child: Text('Auto-reject'),
+                                              ),
+                                            ],
+                                            child: Chip(
+                                              label: Text(
+                                                  _autoDecisionModeLabel(
+                                                      _autoDecisionMode),
+                                                  style: const TextStyle(
+                                                      fontSize: 11)),
+                                              avatar: const Icon(Icons.timer,
+                                                  size: 14),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          PopupMenuButton<int>(
+                                            tooltip: 'Auto response timeout',
+                                            onSelected: (seconds) {
+                                              setState(() {
+                                                _autoDecisionTimeoutSec =
+                                                    seconds;
+                                              });
+                                              _messages.add(MessageItem(
+                                                  '⚙️ 자동응답 대기시간: ${seconds}s',
+                                                  type: MessageType.system));
+                                              _scrollToBottom();
+                                            },
+                                            itemBuilder: (context) => const [
+                                              PopupMenuItem(
+                                                  value: 10,
+                                                  child: Text('10s')),
+                                              PopupMenuItem(
+                                                  value: 30,
+                                                  child: Text('30s')),
+                                              PopupMenuItem(
+                                                  value: 60,
+                                                  child: Text('60s')),
+                                            ],
+                                            child: Chip(
+                                              label: Text(
+                                                  '${_autoDecisionTimeoutSec}s',
+                                                  style: const TextStyle(
+                                                      fontSize: 11)),
+                                              avatar: const Icon(Icons.schedule,
+                                                  size: 14),
+                                            ),
                                           ),
                                           const SizedBox(width: 8),
                                           if (_loadingCommandApprovals ||
@@ -6248,6 +6943,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                             (request['detailLines'] as List? ??
                                                     [])
                                                 .map((e) => e.toString()));
+                                        final requestTimeLabel =
+                                            _timestampLabelFromMap(request,
+                                                preferredKeys: const [
+                                              'timestamp',
+                                              'created_at',
+                                              'createdAt'
+                                            ]);
                                         final choices = List<
                                                 Map<String, dynamic>>.from(
                                             (request['choices'] as List? ?? [])
@@ -6257,6 +6959,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                         final isSubmitting =
                                             _submittingCodexRequestIds
                                                 .contains(requestId);
+                                        final accentColor =
+                                            _codexRequestAccentColor(
+                                                context, request);
 
                                         return Card(
                                           margin: const EdgeInsets.fromLTRB(
@@ -6266,10 +6971,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                             borderRadius:
                                                 BorderRadius.circular(10),
                                             side: BorderSide(
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .outline
-                                                  .withOpacity(0.2),
+                                              color:
+                                                  accentColor.withOpacity(0.35),
+                                              width: 1.2,
                                             ),
                                           ),
                                           child: Padding(
@@ -6278,12 +6982,77 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                               crossAxisAlignment:
                                                   CrossAxisAlignment.start,
                                               children: [
-                                                Text(
-                                                  _codexRequestTitle(request),
-                                                  style: const TextStyle(
-                                                    fontSize: 12,
-                                                    fontWeight: FontWeight.w700,
+                                                Container(
+                                                  padding: const EdgeInsets
+                                                      .symmetric(
+                                                      horizontal: 10,
+                                                      vertical: 6),
+                                                  decoration: BoxDecoration(
+                                                    color: accentColor
+                                                        .withOpacity(0.10),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            999),
                                                   ),
+                                                  child: Row(
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    children: [
+                                                      Icon(
+                                                        Icons
+                                                            .notification_important_rounded,
+                                                        size: 14,
+                                                        color: accentColor,
+                                                      ),
+                                                      const SizedBox(width: 6),
+                                                      Text(
+                                                        'Action required',
+                                                        style: TextStyle(
+                                                          fontSize: 11,
+                                                          fontWeight:
+                                                              FontWeight.w700,
+                                                          color: accentColor,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 8),
+                                                Row(
+                                                  children: [
+                                                    Expanded(
+                                                      child: Text(
+                                                        _codexRequestTitle(
+                                                            request),
+                                                        style: const TextStyle(
+                                                          fontSize: 12,
+                                                          fontWeight:
+                                                              FontWeight.w700,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    Text(
+                                                      requestTimeLabel,
+                                                      style: TextStyle(
+                                                        fontSize: 10,
+                                                        color: Theme.of(context)
+                                                            .colorScheme
+                                                            .onSurfaceVariant,
+                                                      ),
+                                                    ),
+                                                    IconButton(
+                                                      icon: const Icon(
+                                                          Icons.open_in_new,
+                                                          size: 16),
+                                                      tooltip: 'Detail',
+                                                      visualDensity:
+                                                          VisualDensity.compact,
+                                                      onPressed: () {
+                                                        _showCodexRequestDetailSheet(
+                                                            request);
+                                                      },
+                                                    ),
+                                                  ],
                                                 ),
                                                 if (summary.isNotEmpty) ...[
                                                   const SizedBox(height: 4),
@@ -6316,6 +7085,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                         ),
                                                       ),
                                                 ],
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  '모바일에서 버튼을 눌러야 계속 진행됩니다.',
+                                                  style: TextStyle(
+                                                    fontSize: 11,
+                                                    fontWeight: FontWeight.w600,
+                                                    color: accentColor,
+                                                  ),
+                                                ),
                                                 const SizedBox(height: 8),
                                                 if (requestKind == 'user_input')
                                                   Row(
@@ -6440,10 +7218,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                       ..._pendingCommandApprovals
                                           .take(5)
                                           .map((approval) {
-                                        final approvalId =
-                                            approval['approval_id']
-                                                    ?.toString() ??
-                                                '';
                                         final commandMessage =
                                             approval['command_message']
                                                     as Map<String, dynamic>? ??
@@ -6459,6 +7233,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                         final policy = approval['policy']
                                                 as Map<String, dynamic>? ??
                                             {};
+                                        final createdAtLabel =
+                                            _timestampLabelFromMap(approval);
                                         final riskLevel =
                                             policy['risk_level']?.toString() ??
                                                 'unknown';
@@ -6489,15 +7265,36 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                 Row(
                                                   children: [
                                                     Expanded(
-                                                      child: Text(
-                                                        commandRaw,
-                                                        style: const TextStyle(
-                                                          fontSize: 12,
-                                                          fontFamily:
-                                                              'monospace',
-                                                          fontWeight:
-                                                              FontWeight.w600,
-                                                        ),
+                                                      child: Column(
+                                                        crossAxisAlignment:
+                                                            CrossAxisAlignment
+                                                                .start,
+                                                        children: [
+                                                          Text(
+                                                            commandRaw,
+                                                            style:
+                                                                const TextStyle(
+                                                              fontSize: 12,
+                                                              fontFamily:
+                                                                  'monospace',
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w600,
+                                                            ),
+                                                          ),
+                                                          const SizedBox(
+                                                              height: 2),
+                                                          Text(
+                                                            createdAtLabel,
+                                                            style: TextStyle(
+                                                              fontSize: 10,
+                                                              color: Theme.of(
+                                                                      context)
+                                                                  .colorScheme
+                                                                  .onSurfaceVariant,
+                                                            ),
+                                                          ),
+                                                        ],
                                                       ),
                                                     ),
                                                     Container(
@@ -6538,14 +7335,39 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                     ),
                                                   ),
                                                 ],
+                                                Align(
+                                                  alignment:
+                                                      Alignment.centerRight,
+                                                  child: TextButton.icon(
+                                                    onPressed: () {
+                                                      _showRelayApprovalDetailSheet(
+                                                          approval);
+                                                    },
+                                                    icon: const Icon(
+                                                        Icons.open_in_new,
+                                                        size: 16),
+                                                    label: const Text('Detail'),
+                                                  ),
+                                                ),
                                                 const SizedBox(height: 8),
                                                 Row(
                                                   children: [
                                                     Expanded(
-                                                      child: OutlinedButton(
+                                                      child: TextButton(
                                                         onPressed: () {
-                                                          _resolveCommandApproval(
-                                                              approvalId,
+                                                          _markRelayApprovalLater(
+                                                              approval);
+                                                        },
+                                                        child:
+                                                            const Text('Later'),
+                                                      ),
+                                                    ),
+                                                    const SizedBox(width: 8),
+                                                    Expanded(
+                                                      child: OutlinedButton(
+                                                        onPressed: () async {
+                                                          await _confirmAndResolveApproval(
+                                                              approval,
                                                               'reject');
                                                         },
                                                         child: const Text(
@@ -6555,9 +7377,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                     const SizedBox(width: 8),
                                                     Expanded(
                                                       child: FilledButton(
-                                                        onPressed: () {
-                                                          _resolveCommandApproval(
-                                                              approvalId,
+                                                        onPressed: () async {
+                                                          await _confirmAndResolveApproval(
+                                                              approval,
                                                               'approve');
                                                         },
                                                         child: const Text(
@@ -6868,7 +7690,7 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
       ),
       title: const Text('Codex Remote'),
-      subtitle: const Text('버전 0.1.0'),
+      subtitle: const Text('버전 0.1.5'),
       onTap: () => _showAboutDialog(),
     );
   }
@@ -6877,7 +7699,7 @@ class _SettingsPageState extends State<SettingsPage> {
     showAboutDialog(
       context: context,
       applicationName: 'Codex Remote',
-      applicationVersion: '0.1.0',
+      applicationVersion: '0.1.5',
       applicationIcon: Container(
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(

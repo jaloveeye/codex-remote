@@ -2,7 +2,7 @@
   "name": "codex-remote-extension",
   "displayName": "Codex Remote",
   "description": "Remote control Codex from your mobile device via WebSocket or Relay Server",
-  "version": "0.1.3",
+  "version": "0.1.5",
   "publisher": "jaloveeye",
   "license": "MIT",
   "repository": {
