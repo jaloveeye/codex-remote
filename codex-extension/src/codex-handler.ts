@@ -548,6 +548,9 @@ export class CodexHandler {
       this.getNested(objectParams, "item", "threadId"),
       this.getNested(objectParams, "item", "thread_id"),
       this.getNested(objectParams, "item", "conversationId"),
+      this.getNested(objectParams, "msg", "threadId"),
+      this.getNested(objectParams, "msg", "thread_id"),
+      this.getNested(objectParams, "msg", "conversationId"),
     ];
 
     for (const candidate of directCandidates) {
@@ -567,6 +570,8 @@ export class CodexHandler {
       this.getNested(objectParams, "turn", "id"),
       this.getNested(objectParams, "item", "turnId"),
       this.getNested(objectParams, "item", "turn_id"),
+      this.getNested(objectParams, "msg", "turnId"),
+      this.getNested(objectParams, "msg", "turn_id"),
     ];
 
     for (const candidate of candidates) {
@@ -590,6 +595,9 @@ export class CodexHandler {
       this.getNested(objectParams, "agentMessage", "text"),
       this.getNested(objectParams, "data", "delta"),
       this.getNested(objectParams, "data", "text"),
+      this.getNested(objectParams, "msg", "delta"),
+      this.getNested(objectParams, "msg", "text"),
+      this.getNested(objectParams, "msg", "message"),
     ];
 
     for (const candidate of candidates) {
@@ -1463,11 +1471,21 @@ export class CodexHandler {
     const isAgentDelta =
       normalized === "item/agentmessage/delta" ||
       normalized.endsWith("/item/agentmessage/delta") ||
+      normalized.includes("agent_message_content_delta") ||
       key.includes("itemagentmessagedelta") ||
-      key.includes("agentmessagedelta");
+      key.includes("agentmessagedelta") ||
+      key.includes("agentmessagecontentdelta");
 
     if (isAgentDelta) {
       this.handleAgentDelta(params);
+      return;
+    }
+
+    const isAgentMessageSnapshot =
+      normalized.endsWith("/agent_message") || key.endsWith("agentmessage");
+
+    if (isAgentMessageSnapshot) {
+      this.handleAgentMessageSnapshot(params);
       return;
     }
 
@@ -1555,6 +1573,35 @@ export class CodexHandler {
         text: delta,
         fullText: state.accumulatedText,
         isReplace: false,
+        timestamp: new Date().toISOString(),
+        source: "codex",
+        sessionId: state.threadId,
+        clientId,
+        targetDeviceId: state.senderDeviceId || undefined,
+      })
+    );
+  }
+
+  private handleAgentMessageSnapshot(params: unknown): void {
+    const clientId = this.resolveClientIdFromParams(params);
+    if (!clientId) return;
+
+    const state = this.clientTurnStates.get(clientId);
+    if (!state || !this.wsServer) return;
+
+    const messageText = this.extractCompletionText(params, 0).trim();
+    if (!messageText || messageText === state.accumulatedText) return;
+
+    state.accumulatedText = messageText;
+    state.hasChunks = true;
+    this.clientTurnStates.set(clientId, state);
+
+    this.wsServer.send(
+      JSON.stringify({
+        type: "chat_response_chunk",
+        text: messageText,
+        fullText: messageText,
+        isReplace: true,
         timestamp: new Date().toISOString(),
         source: "codex",
         sessionId: state.threadId,

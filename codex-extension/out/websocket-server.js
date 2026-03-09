@@ -326,12 +326,6 @@ class WebSocketServer {
                 const parsed = JSON.parse(message);
                 // Only forward if message is not from relay
                 if (parsed.source !== "relay") {
-                    // Relay 모드에서는 최종 응답만 전달한다.
-                    // 스트리밍 청크가 순서 꼬임/잔여 조각을 만들 수 있어 모바일 웹에서는 비활성화한다.
-                    if (parsed.type === "chat_response_chunk" ||
-                        parsed.type === "chat_response_complete") {
-                        return;
-                    }
                     if (parsed.type === "chat_response") {
                         this.log(`Forwarding chat_response to relay (text length: ${(parsed.text || "").length})`);
                     }

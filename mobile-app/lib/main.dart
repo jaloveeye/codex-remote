@@ -444,9 +444,15 @@ class MessageItem {
   final DateTime timestamp;
   String? agentMode; // 에이전트 모드 (userPrompt 타입일 때만 사용)
   LogLevel? logLevel; // 로그 레벨 (log 타입일 때만 사용)
+  String? logSource; // 로그 소스 (log 타입일 때만 사용)
+  String? logChannel; // local/relay 채널 표시용
 
   MessageItem(this.text,
-      {this.type = MessageType.normal, this.agentMode, this.logLevel})
+      {this.type = MessageType.normal,
+      this.agentMode,
+      this.logLevel,
+      this.logSource,
+      this.logChannel})
       : timestamp = DateTime.now();
 
   // 필터 카테고리 결정
@@ -581,7 +587,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final TextEditingController _sessionIdController = TextEditingController();
 
   // 입력창 상태 관리
-  int _textFieldKey = 0; // TextField 재생성용 Key
   DateTime? _lastPromptSubmitTime; // Enter 중복 전송 방지용 debounce
   final FocusNode _sessionIdFocusNode = FocusNode();
   final FocusNode _localIpFocusNode = FocusNode();
@@ -960,42 +965,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           _handleCodexServerRequestStatus(
               Map<String, dynamic>.from(data as Map));
         } else if (type == 'log') {
-          // 실시간 로그 메시지 처리
-          final logLevelStr = data['level'] ?? 'info';
-          final logMessage = data['message'] ?? '';
-          final logSource = data['source'] ?? 'unknown';
-          final logError = data['error'];
-
-          // 로그 레벨 파싱
-          LogLevel parsedLogLevel;
-          switch (logLevelStr) {
-            case 'error':
-              parsedLogLevel = LogLevel.error;
-              break;
-            case 'warn':
-            case 'warning':
-              parsedLogLevel = LogLevel.warning;
-              break;
-            default:
-              parsedLogLevel = LogLevel.info;
-          }
-
-          String logPrefix = '';
-          switch (logSource) {
-            case 'extension':
-              logPrefix = '🔌 [Extension]';
-              break;
-            default:
-              logPrefix = '📝 [Log]';
-          }
-
-          String logText = '$logPrefix $logMessage';
-          if (logError != null) {
-            logText += ' - Error: $logError';
-          }
-
-          _messages.add(MessageItem(logText,
-              type: MessageType.log, logLevel: parsedLogLevel));
+          _appendPrettyLogMessage(data, channel: 'local');
         } else if (type == 'agent_mode_selected') {
           // 자동 모드로 선택된 실제 모드 정보
           final requestedMode = data['requestedMode'] ?? 'auto';
@@ -1755,43 +1725,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           );
         }
       } else if (type == 'log') {
-        // 실시간 로그 메시지 처리
-        final logLevelStr = messageData['level'] ?? 'info';
-        final logMessage = messageData['message'] ?? '';
-        final logSource = messageData['source'] ?? 'unknown';
-        final logError = messageData['error'];
-
-        // 로그 레벨 파싱
-        LogLevel parsedLogLevel;
-        switch (logLevelStr) {
-          case 'error':
-            parsedLogLevel = LogLevel.error;
-            break;
-          case 'warn':
-          case 'warning':
-            parsedLogLevel = LogLevel.warning;
-            break;
-          default:
-            parsedLogLevel = LogLevel.info;
-        }
-
-        String logPrefix = '';
-        switch (logSource) {
-          case 'extension':
-            logPrefix = '🔌 [Extension]';
-            break;
-          default:
-            logPrefix = '📝 [Log]';
-        }
-
-        String logText = '$logPrefix $logMessage';
-        if (logError != null) {
-          logText += ' - Error: $logError';
-        }
-
         setState(() {
-          _messages.add(MessageItem(logText,
-              type: MessageType.log, logLevel: parsedLogLevel));
+          _appendPrettyLogMessage(messageData, channel: 'relay');
         });
         _scrollToBottom();
       } else if (type == 'codex_raw_notification' ||
@@ -2808,6 +2743,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           kindColor = Theme.of(context).colorScheme.secondary;
           kindIcon = Icons.timelapse;
           break;
+        case 'plan':
+          kindColor = const Color(0xFF5E7CE2);
+          kindIcon = Icons.checklist_rtl;
+          break;
+        case 'approval':
+          kindColor = const Color(0xFFB56F00);
+          kindIcon = Icons.gpp_maybe_outlined;
+          break;
         case 'error':
           kindColor = Theme.of(context).colorScheme.error;
           kindIcon = Icons.error_outline;
@@ -2885,48 +2828,86 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     // 로그 메시지 스타일
     if (message.type == MessageType.log) {
-      // 로그 레벨에 따라 색상 결정
-      Color logColor;
-      IconData logIcon;
-
-      switch (message.logLevel ?? LogLevel.info) {
-        case LogLevel.error:
-          logColor = Theme.of(context).colorScheme.error;
-          logIcon = Icons.error;
-        case LogLevel.warning:
-          logColor = const Color(0xFFFF9800); // 오렌지
-          logIcon = Icons.warning;
-        case LogLevel.info:
-          logColor = Theme.of(context).colorScheme.tertiary;
-          logIcon = Icons.info;
-      }
+      final level = message.logLevel ?? LogLevel.info;
+      final sourceLabel = _logSourceLabel(message.logSource ?? 'system');
+      final levelLabel = _logLevelLabel(level);
+      final channel = (message.logChannel ?? '').trim();
+      final isDark = Theme.of(context).brightness == Brightness.dark;
+      final Color logColor = _logLevelColor(level);
+      final IconData logIcon = _logLevelIcon(level);
 
       return Container(
         margin: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
-        padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 6.0),
+        padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
         decoration: BoxDecoration(
-          color: logColor.withOpacity(0.1),
+          color: logColor.withOpacity(isDark ? 0.16 : 0.10),
           borderRadius: BorderRadius.circular(12.0),
-          border: Border.all(color: logColor.withOpacity(0.3), width: 1),
+          border: Border.all(color: logColor.withOpacity(0.32), width: 1),
         ),
-        child: Row(
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(
-              logIcon,
-              size: 14,
-              color: logColor,
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: SelectableText(
-                message.text,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: logColor.withOpacity(0.9),
-                  fontFamily: 'monospace',
-                  height: 1.4,
+            Row(
+              children: [
+                Icon(
+                  logIcon,
+                  size: 14,
+                  color: logColor,
                 ),
+                const SizedBox(width: 8),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: logColor.withOpacity(isDark ? 0.25 : 0.16),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    levelLabel,
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      color: logColor,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  sourceLabel,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                if (channel.isNotEmpty) ...[
+                  const SizedBox(width: 6),
+                  Text(
+                    '[$channel]',
+                    style: TextStyle(
+                      fontSize: 9,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+                const Spacer(),
+                Text(
+                  _formatTime(message.timestamp),
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            SelectableText(
+              message.text,
+              style: TextStyle(
+                fontSize: 11,
+                color: Theme.of(context).colorScheme.onSurface,
+                fontFamily: 'monospace',
+                height: 1.35,
               ),
             ),
           ],
@@ -3078,22 +3059,78 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
-  // 입력창 클리어 (한글 IME composing 버퍼 완전 초기화)
+  bool _isCommandInputComposing([TextEditingValue? value]) {
+    final current = value ?? _commandController.value;
+    final composing = current.composing;
+    return composing.isValid && !composing.isCollapsed;
+  }
+
   void _clearCommandInput() {
-    // Controller 텍스트 클리어
-    _commandController.clear();
+    _commandController.value = const TextEditingValue(
+      text: '',
+      selection: TextSelection.collapsed(offset: 0),
+      composing: TextRange.empty,
+    );
+    if (!_commandFocusNode.hasFocus) {
+      _commandFocusNode.requestFocus();
+    }
+  }
 
-    // Key를 변경하여 TextField 완전 재생성 (IME 상태 완전 리셋)
-    setState(() {
-      _textFieldKey++;
-    });
+  Future<void> _submitPromptFromInput({required bool newSession}) async {
+    if (!_isConnected || _isWaitingForResponse) return;
 
-    // 새 TextField에 포커스 요청
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        _commandFocusNode.requestFocus();
+    final now = DateTime.now();
+    if (_lastPromptSubmitTime != null &&
+        now.difference(_lastPromptSubmitTime!).inMilliseconds < 400) {
+      return;
+    }
+
+    // 1차 체크: 한글 IME 조합 중이면 commit을 한 프레임 기다린다.
+    if (_isCommandInputComposing()) {
+      await Future<void>.delayed(Duration.zero);
+      if (_isCommandInputComposing()) {
+        return;
       }
-    });
+    }
+
+    final text = _commandController.text.trim();
+    if (text.isEmpty) return;
+
+    _lastPromptSubmitTime = now;
+    _sendCommand('insert_text',
+        text: text,
+        prompt: true,
+        execute: true,
+        newSession: newSession,
+        agentMode: _selectedAgentMode);
+    _clearCommandInput();
+  }
+
+  KeyEventResult _handlePromptInputKeyEvent(FocusNode node, KeyEvent event) {
+    if (!_commandFocusNode.hasFocus ||
+        !_isConnected ||
+        _isWaitingForResponse ||
+        event.logicalKey != LogicalKeyboardKey.enter) {
+      return KeyEventResult.ignored;
+    }
+
+    // Shift+Enter는 줄바꿈
+    if (HardwareKeyboard.instance.isShiftPressed) {
+      return KeyEventResult.ignored;
+    }
+
+    // 조합 중 Enter는 IME commit 동작을 우선
+    if (_isCommandInputComposing()) {
+      return KeyEventResult.ignored;
+    }
+
+    if (event is! KeyUpEvent) {
+      // KeyDown/Repeat 단계에서 먼저 consume해서 newline 삽입을 막는다.
+      return KeyEventResult.handled;
+    }
+
+    unawaited(_submitPromptFromInput(newSession: false));
+    return KeyEventResult.handled;
   }
 
   // 연결 설정 로드 (SharedPreferences)
@@ -3338,6 +3375,111 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  LogLevel _parseLogLevel(dynamic rawLevel) {
+    switch (rawLevel?.toString().toLowerCase()) {
+      case 'error':
+        return LogLevel.error;
+      case 'warn':
+      case 'warning':
+        return LogLevel.warning;
+      default:
+        return LogLevel.info;
+    }
+  }
+
+  String _normalizeLogSource(dynamic rawSource) {
+    final source = rawSource?.toString().trim().toLowerCase() ?? '';
+    if (source.isEmpty) return 'system';
+    if (source == 'codex') return 'codex';
+    if (source == 'extension') return 'extension';
+    if (source == 'relay') return 'relay';
+    return source;
+  }
+
+  String _prettifyLogBody(String rawMessage) {
+    var text = rawMessage.trim();
+    if (text.isEmpty) return '(empty)';
+
+    text = text.replaceFirst(RegExp(r'^\[(CODEX|Relay|Extension)\]\s*'), '');
+
+    final ignoredRpcMatch = RegExp(
+            r'ignored rpc notification method=([^,]+), params=(.+)$',
+            caseSensitive: false)
+        .firstMatch(text);
+    if (ignoredRpcMatch != null) {
+      final method = ignoredRpcMatch.group(1)?.trim() ?? 'unknown';
+      final params = ignoredRpcMatch.group(2)?.trim() ?? '';
+      return 'Ignored RPC: $method\nparams: ${_truncateForLog(params, maxLength: 180)}';
+    }
+
+    return text;
+  }
+
+  void _appendPrettyLogMessage(dynamic payload, {required String channel}) {
+    final map = payload is Map
+        ? Map<String, dynamic>.from(payload)
+        : <String, dynamic>{};
+    final level = _parseLogLevel(map['level']);
+    final source = _normalizeLogSource(map['source']);
+    final body = _prettifyLogBody(map['message']?.toString() ?? '');
+    final errorText = map['error']?.toString().trim() ?? '';
+    final composed = errorText.isNotEmpty ? '$body\nerror: $errorText' : body;
+
+    _messages.add(MessageItem(composed,
+        type: MessageType.log,
+        logLevel: level,
+        logSource: source,
+        logChannel: channel));
+  }
+
+  String _logSourceLabel(String source) {
+    switch (source) {
+      case 'codex':
+        return 'Codex';
+      case 'extension':
+        return 'Extension';
+      case 'relay':
+        return 'Relay';
+      case 'system':
+        return 'System';
+      default:
+        return source;
+    }
+  }
+
+  String _logLevelLabel(LogLevel level) {
+    switch (level) {
+      case LogLevel.error:
+        return 'ERROR';
+      case LogLevel.warning:
+        return 'WARN';
+      case LogLevel.info:
+        return 'INFO';
+    }
+  }
+
+  Color _logLevelColor(LogLevel level) {
+    switch (level) {
+      case LogLevel.error:
+        return Theme.of(context).colorScheme.error;
+      case LogLevel.warning:
+        return const Color(0xFFEF8B00);
+      case LogLevel.info:
+        return Theme.of(context).colorScheme.tertiary;
+    }
+  }
+
+  IconData _logLevelIcon(LogLevel level) {
+    switch (level) {
+      case LogLevel.error:
+        return Icons.error_outline;
+      case LogLevel.warning:
+        return Icons.warning_amber_rounded;
+      case LogLevel.info:
+        return Icons.info_outline;
+    }
+  }
+
   String _truncateForLog(String value, {int maxLength = 72}) {
     final trimmed = value.trim();
     if (trimmed.isEmpty) return '';
@@ -3357,7 +3499,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   String _codexEventKind(String method) {
     final normalized = method.toLowerCase();
-    if (normalized.contains('agentmessage') ||
+    if (normalized.contains('plan/')) return 'plan';
+    if (normalized.contains('approval')) return 'approval';
+    if (normalized.contains('agent_message_content_delta') ||
+        normalized.contains('agentmessage') ||
         normalized.contains('reasoning')) {
       return 'reasoning';
     }
@@ -3367,8 +3512,52 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return 'event';
   }
 
+  String _statusBadge(String rawStatus) {
+    final status = rawStatus.toLowerCase();
+    if (status == 'completed' || status == 'done') return '✅';
+    if (status == 'inprogress' || status == 'in_progress') return '⏳';
+    if (status == 'pending' || status == 'todo') return '🕓';
+    if (status == 'failed' || status == 'error') return '❌';
+    return '•';
+  }
+
+  String _formatPlanUpdateDetail(dynamic params) {
+    final map =
+        params is Map ? Map<String, dynamic>.from(params) : <String, dynamic>{};
+    final explanation = map['explanation']?.toString().trim() ?? '';
+    final rawPlan = map['plan'] as List? ?? const [];
+    final steps = rawPlan
+        .map((item) => item is Map ? Map<String, dynamic>.from(item) : null)
+        .whereType<Map<String, dynamic>>()
+        .toList();
+
+    final parts = <String>[];
+    if (explanation.isNotEmpty) {
+      parts.add(_truncateForLog(explanation, maxLength: 160));
+    }
+    if (steps.isNotEmpty) {
+      final formattedSteps = steps
+          .map((step) {
+            final status = step['status']?.toString() ?? 'pending';
+            final title = step['step']?.toString().trim() ?? '(untitled)';
+            return '${_statusBadge(status)} ${_truncateForLog(title, maxLength: 82)}';
+          })
+          .take(3)
+          .toList();
+      parts.add(formattedSteps.join(' | '));
+      if (steps.length > 3) {
+        parts.add('… +${steps.length - 3} more step(s)');
+      }
+    }
+
+    if (parts.isEmpty) {
+      return _safeJsonSnippet(params, maxLength: 220);
+    }
+    return parts.join('\n');
+  }
+
   Map<String, String> _parseCodexRawEventText(String text) {
-    final regex = RegExp(r'^📡 \[(.+?)\] (.+?) :: (.+)$');
+    final regex = RegExp(r'^📡 \[(.+?)\] (.+?) :: ([\s\S]+)$');
     final match = regex.firstMatch(text.trim());
     if (match == null) {
       return {
@@ -3424,6 +3613,24 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return '';
   }
 
+  String _formatCodexEventDetail(String method, dynamic params) {
+    final normalized = method.toLowerCase();
+    if (normalized.contains('turn/plan/updated')) {
+      return _formatPlanUpdateDetail(params);
+    }
+    if (normalized.contains('agent_message_content_delta')) {
+      final text = _extractCodexEventText(params);
+      if (text.isNotEmpty) {
+        return 'Δ ${_truncateForLog(text, maxLength: 180)}';
+      }
+    }
+
+    final text = _extractCodexEventText(params);
+    return text.isNotEmpty
+        ? _truncateForLog(text, maxLength: 220)
+        : _safeJsonSnippet(params, maxLength: 220);
+  }
+
   void _recordCodexRawNotification(dynamic payload, {required String channel}) {
     final map = payload is Map
         ? Map<String, dynamic>.from(payload)
@@ -3432,11 +3639,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         map['eventMethod']?.toString().trim() ??
         'unknown';
     final params = map['params'] ?? map['eventParams'] ?? payload;
-    final text = _extractCodexEventText(params);
     final kind = _codexEventKind(method);
-    final detail = text.isNotEmpty
-        ? _truncateForLog(text, maxLength: 220)
-        : _safeJsonSnippet(params, maxLength: 220);
+    final detail = _formatCodexEventDetail(method, params);
 
     _messages.add(MessageItem('📡 [$channel] $method/$kind :: $detail',
         type: MessageType.codexRawEvent, logLevel: LogLevel.info));
@@ -5022,36 +5226,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     ),
                   ),
                   onSubmitted: (value) {
-                    final text = value.trim();
-                    if (text.isEmpty ||
-                        !_isConnected ||
-                        _isWaitingForResponse) {
-                      return;
-                    }
-                    _sendCommand('insert_text',
-                        text: text,
-                        prompt: true,
-                        execute: true,
-                        newSession: false,
-                        agentMode: _selectedAgentMode);
-                    _clearCommandInput();
+                    unawaited(_submitPromptFromInput(newSession: false));
                   },
                 ),
               ),
               const SizedBox(width: 8),
               IconButton.filled(
                 onPressed: () {
-                  final text = _commandController.text.trim();
-                  if (text.isEmpty || !_isConnected || _isWaitingForResponse) {
-                    return;
-                  }
-                  _sendCommand('insert_text',
-                      text: text,
-                      prompt: true,
-                      execute: true,
-                      newSession: false,
-                      agentMode: _selectedAgentMode);
-                  _clearCommandInput();
+                  unawaited(_submitPromptFromInput(newSession: false));
                 },
                 icon: const Icon(Icons.send),
                 tooltip: '전송',
@@ -6681,38 +6863,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             ),
                           ],
                           const SizedBox(height: 8),
-                          // KeyboardListener: Enter 전송. 컨트롤러에서 읽고 debounce + 전송 후 한 프레임 뒤 재정리로 IME 중복 전송 방지.
-                          // (Focus+동일 FocusNode는 focus_manager assertion 유발로 사용 안 함)
-                          KeyboardListener(
-                            focusNode: FocusNode(),
-                            onKeyEvent: (event) {
-                              if (event is! KeyDownEvent ||
-                                  event.logicalKey !=
-                                      LogicalKeyboardKey.enter ||
-                                  HardwareKeyboard.instance.isShiftPressed ||
-                                  !_commandFocusNode.hasFocus ||
-                                  !_isConnected) {
-                                return;
-                              }
-                              final now = DateTime.now();
-                              if (_lastPromptSubmitTime != null &&
-                                  now
-                                          .difference(_lastPromptSubmitTime!)
-                                          .inMilliseconds <
-                                      400) {
-                                return;
-                              }
-                              final text = _commandController.text.trim();
-                              if (text.isEmpty) return;
-                              _lastPromptSubmitTime = now;
-                              _sendCommand('insert_text',
-                                  text: text,
-                                  prompt: true,
-                                  execute: true,
-                                  newSession: false,
-                                  agentMode: _selectedAgentMode);
-                              _clearCommandInput();
-                            },
+                          // Enter=전송 / Shift+Enter=줄바꿈
+                          // IME 조합 안정성을 위해 Focus(onKeyEvent) + KeyUp 전송으로 처리
+                          Focus(
+                            onKeyEvent: _handlePromptInputKeyEvent,
                             // ValueListenableBuilder로 입력창 감싸기 (전체 UI 리빌드 방지)
                             child: ValueListenableBuilder<TextEditingValue>(
                               valueListenable: _commandController,
@@ -6720,7 +6874,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                 final hasText =
                                     textValue.text.trim().isNotEmpty;
                                 return TextField(
-                                  key: ValueKey(_textFieldKey),
                                   controller: _commandController,
                                   focusNode: _commandFocusNode,
                                   decoration: InputDecoration(
@@ -6765,20 +6918,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                               hasText &&
                                               !_isWaitingForResponse
                                           ? () {
-                                              if (!mounted) return;
-                                              final text = _commandController
-                                                  .text
-                                                  .trim();
-                                              if (text.isNotEmpty) {
-                                                _sendCommand('insert_text',
-                                                    text: text,
-                                                    prompt: true,
-                                                    execute: true,
-                                                    newSession: false,
-                                                    agentMode:
-                                                        _selectedAgentMode);
-                                                _clearCommandInput();
-                                              }
+                                              unawaited(_submitPromptFromInput(
+                                                  newSession: false));
                                             }
                                           : null,
                                       icon: _isWaitingForResponse
@@ -6829,20 +6970,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                     OutlinedButton.icon(
                                       onPressed: _isConnected && hasText
                                           ? () {
-                                              if (!mounted) return;
-                                              final text = _commandController
-                                                  .text
-                                                  .trim();
-                                              if (text.isNotEmpty) {
-                                                _sendCommand('insert_text',
-                                                    text: text,
-                                                    prompt: true,
-                                                    execute: true,
-                                                    newSession: true,
-                                                    agentMode:
-                                                        _selectedAgentMode);
-                                                _clearCommandInput();
-                                              }
+                                              unawaited(_submitPromptFromInput(
+                                                  newSession: true));
                                             }
                                           : null,
                                       icon: const Icon(Icons.refresh, size: 18),
