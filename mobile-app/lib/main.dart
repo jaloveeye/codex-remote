@@ -414,6 +414,7 @@ class MessageType {
   static const String terminalOutput = 'terminal_output';
   static const String system = 'system'; // Sent, Received, Command succeeded 등
   static const String log = 'log'; // 실시간 로그
+  static const String codexRawEvent = 'codex_raw_event';
 }
 
 // 필터 카테고리
@@ -461,6 +462,7 @@ class MessageItem {
       case MessageType.userPrompt:
         return MessageFilter.userPrompt;
       case MessageType.log:
+      case MessageType.codexRawEvent:
         return MessageFilter.log;
       case MessageType.system:
       case MessageType.normal:
@@ -1102,6 +1104,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           Future.delayed(const Duration(milliseconds: 150), () {
             _loadRuntimeCapabilities();
           });
+        } else if (type == 'codex_raw_notification' ||
+            type == 'codex_notification') {
+          _recordCodexRawNotification(data, channel: 'local');
+        } else {
+          _recordUnhandledIncomingMessage(type.toString(), data, 'local');
         }
       });
       _scrollToBottom();
@@ -1787,6 +1794,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               type: MessageType.log, logLevel: parsedLogLevel));
         });
         _scrollToBottom();
+      } else if (type == 'codex_raw_notification' ||
+          type == 'codex_notification') {
+        _recordCodexRawNotification(messageData, channel: 'relay');
+      } else {
+        _recordUnhandledIncomingMessage(type.toString(), messageData, 'relay');
       }
     });
     _scrollToBottom();
@@ -3185,9 +3197,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             final policy = approval['policy'] as Map<String, dynamic>? ?? {};
             final riskLevel = policy['risk_level']?.toString() ?? 'unknown';
             final commandRaw = _truncateForLog(_approvalCommandRaw(approval));
+            final requestType = _approvalRequestTypeLabel(approval);
+            final requestedBy = _approvalRequestedBy(approval);
 
             _messages.add(MessageItem(
-                '🔐 승인 요청 도착: $approvalId · $commandRaw (risk: $riskLevel)',
+                '🔐 승인 요청 도착: $requestType · $commandRaw · by $requestedBy (risk: $riskLevel)',
                 type: MessageType.system));
           }
           _loadingCommandApprovals = false;
@@ -3232,11 +3246,127 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return '${trimmed.substring(0, maxLength)}…';
   }
 
+  String _safeJsonSnippet(dynamic payload, {int maxLength = 240}) {
+    try {
+      final encoded = jsonEncode(payload);
+      return _truncateForLog(encoded, maxLength: maxLength);
+    } catch (_) {
+      return _truncateForLog(payload?.toString() ?? '(empty)',
+          maxLength: maxLength);
+    }
+  }
+
+  String _extractCodexEventText(dynamic value, {int depth = 0}) {
+    if (value == null || depth > 4) return '';
+
+    if (value is String) {
+      final trimmed = value.trim();
+      if (trimmed.isEmpty) return '';
+      return trimmed;
+    }
+
+    if (value is Map) {
+      const preferredKeys = [
+        'delta',
+        'text',
+        'message',
+        'content',
+        'reasoning',
+        'summary'
+      ];
+      for (final key in preferredKeys) {
+        final extracted = _extractCodexEventText(value[key], depth: depth + 1);
+        if (extracted.isNotEmpty) return extracted;
+      }
+      for (final entry in value.entries) {
+        final extracted = _extractCodexEventText(entry.value, depth: depth + 1);
+        if (extracted.isNotEmpty) return extracted;
+      }
+      return '';
+    }
+
+    if (value is List) {
+      for (final item in value) {
+        final extracted = _extractCodexEventText(item, depth: depth + 1);
+        if (extracted.isNotEmpty) return extracted;
+      }
+      return '';
+    }
+
+    return '';
+  }
+
+  void _recordCodexRawNotification(dynamic payload, {required String channel}) {
+    final map = payload is Map
+        ? Map<String, dynamic>.from(payload)
+        : <String, dynamic>{};
+    final method = map['method']?.toString().trim() ??
+        map['eventMethod']?.toString().trim() ??
+        'unknown';
+    final params = map['params'] ?? map['eventParams'] ?? payload;
+    final text = _extractCodexEventText(params);
+    final detail = text.isNotEmpty
+        ? _truncateForLog(text, maxLength: 220)
+        : _safeJsonSnippet(params, maxLength: 220);
+
+    _messages.add(MessageItem('📡 [$channel] $method → $detail',
+        type: MessageType.codexRawEvent, logLevel: LogLevel.info));
+  }
+
+  void _recordUnhandledIncomingMessage(
+      String type, dynamic payload, String channel) {
+    final detail = _safeJsonSnippet(payload, maxLength: 220);
+    _messages.add(MessageItem('🧩 [$channel] unhandled type=$type → $detail',
+        type: MessageType.codexRawEvent, logLevel: LogLevel.warning));
+  }
+
   String _approvalCommandRaw(Map<String, dynamic> approval) {
+    final commandData = _approvalCommandData(approval);
+    return commandData['command']?.toString() ??
+        commandData['raw']?.toString() ??
+        '(unknown)';
+  }
+
+  Map<String, dynamic> _approvalCommandData(Map<String, dynamic> approval) {
     final commandMessage =
         approval['command_message'] as Map<String, dynamic>? ?? {};
-    final commandData = commandMessage['data'] as Map<String, dynamic>? ?? {};
-    return commandData['command']?.toString() ?? '(unknown)';
+    return commandMessage['data'] as Map<String, dynamic>? ?? {};
+  }
+
+  String _approvalRequestTypeLabel(Map<String, dynamic> approval) {
+    final commandMessage =
+        approval['command_message'] as Map<String, dynamic>? ?? {};
+    final type = commandMessage['type']?.toString().toLowerCase() ?? '';
+    switch (type) {
+      case 'command':
+        return 'Command execution';
+      case 'chat':
+        return 'Chat request';
+      case 'prompt':
+        return 'Prompt request';
+      default:
+        return type.isEmpty ? 'Approval request' : type;
+    }
+  }
+
+  String _approvalRequestedBy(Map<String, dynamic> approval) {
+    final commandMessage =
+        approval['command_message'] as Map<String, dynamic>? ?? {};
+    final sender = commandMessage['senderDeviceId']?.toString().trim() ?? '';
+    final requestedBy = approval['requested_by']?.toString().trim() ?? '';
+    return sender.isNotEmpty
+        ? sender
+        : (requestedBy.isNotEmpty ? requestedBy : '(unknown)');
+  }
+
+  String _approvalWorkingDirectory(Map<String, dynamic> approval) {
+    final commandData = _approvalCommandData(approval);
+    return commandData['cwd']?.toString().trim() ?? '';
+  }
+
+  String _approvalPolicyRule(Map<String, dynamic> approval) {
+    final policy = approval['policy'] as Map<String, dynamic>? ?? {};
+    return policy['rule_id']?.toString().trim() ?? '';
   }
 
   String _describeDecisionPayload(Map<String, dynamic> responsePayload) {
@@ -3422,6 +3552,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final riskLevel =
         policy['risk_level']?.toString().toLowerCase().trim() ?? 'unknown';
     final commandRaw = _approvalCommandRaw(approval);
+    final requestType = _approvalRequestTypeLabel(approval);
+    final requestedBy = _approvalRequestedBy(approval);
+    final cwd = _approvalWorkingDirectory(approval);
     final isHighRisk = riskLevel == 'high' || riskLevel == 'critical';
 
     if (action == 'approve' && isHighRisk && mounted) {
@@ -3434,6 +3567,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text('risk: $riskLevel'),
+                  Text('type: $requestType'),
+                  Text('requested by: $requestedBy'),
+                  if (cwd.isNotEmpty) Text('cwd: $cwd'),
                   const SizedBox(height: 8),
                   SelectableText(
                     _truncateForLog(commandRaw, maxLength: 240),
@@ -3478,6 +3614,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final reasons = List<String>.from(
         (policy['reasons'] as List? ?? []).map((e) => e.toString()));
     final createdAt = _timestampLabelFromMap(approval);
+    final requestType = _approvalRequestTypeLabel(approval);
+    final requestedBy = _approvalRequestedBy(approval);
+    final cwd = _approvalWorkingDirectory(approval);
+    final ruleId = _approvalPolicyRule(approval);
 
     await showModalBottomSheet<void>(
       context: context,
@@ -3503,6 +3643,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   Text('Created: $createdAt',
                       style: TextStyle(
                           fontSize: 12, color: scheme.onSurfaceVariant)),
+                  Text('Type: $requestType',
+                      style: TextStyle(
+                          fontSize: 12, color: scheme.onSurfaceVariant)),
+                  Text('Requested by: $requestedBy',
+                      style: TextStyle(
+                          fontSize: 12, color: scheme.onSurfaceVariant)),
+                  if (cwd.isNotEmpty)
+                    Text('CWD: $cwd',
+                        style: TextStyle(
+                            fontSize: 12, color: scheme.onSurfaceVariant)),
+                  if (ruleId.isNotEmpty)
+                    Text('Policy rule: $ruleId',
+                        style: TextStyle(
+                            fontSize: 12, color: scheme.onSurfaceVariant)),
                   const SizedBox(height: 12),
                   Text(
                     commandRaw,
@@ -7218,18 +7372,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                       ..._pendingCommandApprovals
                                           .take(5)
                                           .map((approval) {
-                                        final commandMessage =
-                                            approval['command_message']
-                                                    as Map<String, dynamic>? ??
-                                                {};
-                                        final commandData =
-                                            commandMessage['data']
-                                                    as Map<String, dynamic>? ??
-                                                {};
                                         final commandRaw =
-                                            commandData['command']
-                                                    ?.toString() ??
-                                                '(unknown)';
+                                            _approvalCommandRaw(approval);
+                                        final requestType =
+                                            _approvalRequestTypeLabel(approval);
+                                        final requestedBy =
+                                            _approvalRequestedBy(approval);
+                                        final cwd =
+                                            _approvalWorkingDirectory(approval);
                                         final policy = approval['policy']
                                                 as Map<String, dynamic>? ??
                                             {};
@@ -7271,6 +7421,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                                 .start,
                                                         children: [
                                                           Text(
+                                                            requestType,
+                                                            style: TextStyle(
+                                                              fontSize: 10,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w700,
+                                                              color: Theme.of(
+                                                                      context)
+                                                                  .colorScheme
+                                                                  .onSurfaceVariant,
+                                                            ),
+                                                          ),
+                                                          const SizedBox(
+                                                              height: 2),
+                                                          Text(
                                                             commandRaw,
                                                             style:
                                                                 const TextStyle(
@@ -7286,6 +7451,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                               height: 2),
                                                           Text(
                                                             createdAtLabel,
+                                                            style: TextStyle(
+                                                              fontSize: 10,
+                                                              color: Theme.of(
+                                                                      context)
+                                                                  .colorScheme
+                                                                  .onSurfaceVariant,
+                                                            ),
+                                                          ),
+                                                          const SizedBox(
+                                                              height: 2),
+                                                          Text(
+                                                            'by $requestedBy${cwd.isNotEmpty ? ' · $cwd' : ''}',
+                                                            maxLines: 1,
+                                                            overflow:
+                                                                TextOverflow
+                                                                    .ellipsis,
                                                             style: TextStyle(
                                                               fontSize: 10,
                                                               color: Theme.of(
