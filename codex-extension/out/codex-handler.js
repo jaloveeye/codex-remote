@@ -1112,9 +1112,26 @@ class CodexHandler {
             this.handleGenericError(params);
             return;
         }
+        this.forwardRawCodexNotification(method, params);
         if (key.includes("turn") || key.includes("agent") || key.includes("error")) {
             this.log(`[CODEX] ignored rpc notification method=${method}, params=${JSON.stringify(params).substring(0, 300)}`);
         }
+    }
+    forwardRawCodexNotification(method, params) {
+        if (!this.wsServer)
+            return;
+        const clientId = this.resolveClientIdFromParams(params);
+        const state = clientId ? this.clientTurnStates.get(clientId) : null;
+        this.wsServer.send(JSON.stringify({
+            type: "codex_raw_notification",
+            method,
+            params,
+            timestamp: new Date().toISOString(),
+            source: "codex",
+            clientId: clientId || undefined,
+            sessionId: state?.threadId,
+            targetDeviceId: state?.senderDeviceId || undefined,
+        }));
     }
     handleAgentDelta(params) {
         const clientId = this.resolveClientIdFromParams(params);
