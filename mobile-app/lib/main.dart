@@ -2784,6 +2784,105 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       );
     }
 
+    // Codex raw event 메시지 스타일
+    if (message.type == MessageType.codexRawEvent) {
+      final parsed = _parseCodexRawEventText(message.text);
+      final channel = parsed['channel'] ?? 'unknown';
+      final methodWithKind = parsed['method'] ?? 'unknown';
+      final detail = parsed['detail'] ?? '';
+      final methodParts = methodWithKind.split('/');
+      final kind = methodParts.isNotEmpty ? methodParts.last : 'event';
+
+      Color kindColor;
+      IconData kindIcon;
+      switch (kind) {
+        case 'reasoning':
+          kindColor = Theme.of(context).colorScheme.primary;
+          kindIcon = Icons.psychology_alt_outlined;
+          break;
+        case 'tool':
+          kindColor = Theme.of(context).colorScheme.tertiary;
+          kindIcon = Icons.build_outlined;
+          break;
+        case 'turn':
+          kindColor = Theme.of(context).colorScheme.secondary;
+          kindIcon = Icons.timelapse;
+          break;
+        case 'error':
+          kindColor = Theme.of(context).colorScheme.error;
+          kindIcon = Icons.error_outline;
+          break;
+        default:
+          kindColor = Theme.of(context).colorScheme.onSurfaceVariant;
+          kindIcon = Icons.radar_outlined;
+      }
+
+      return Container(
+        margin: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 3.0),
+        padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
+        decoration: BoxDecoration(
+          color: kindColor.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(12.0),
+          border: Border.all(color: kindColor.withOpacity(0.25), width: 1),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(kindIcon, size: 14, color: kindColor),
+                const SizedBox(width: 6),
+                Text(
+                  kind.toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: kindColor,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '[$channel]',
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  _formatTime(message.timestamp),
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            SelectableText(
+              methodWithKind,
+              style: TextStyle(
+                fontSize: 11,
+                fontFamily: 'monospace',
+                fontWeight: FontWeight.w600,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
+            ),
+            const SizedBox(height: 3),
+            SelectableText(
+              detail,
+              style: TextStyle(
+                fontSize: 11,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontFamily: 'monospace',
+                height: 1.35,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     // 로그 메시지 스타일
     if (message.type == MessageType.log) {
       // 로그 레벨에 따라 색상 결정
@@ -3256,6 +3355,35 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  String _codexEventKind(String method) {
+    final normalized = method.toLowerCase();
+    if (normalized.contains('agentmessage') ||
+        normalized.contains('reasoning')) {
+      return 'reasoning';
+    }
+    if (normalized.contains('tool/')) return 'tool';
+    if (normalized.contains('turn/')) return 'turn';
+    if (normalized.contains('error')) return 'error';
+    return 'event';
+  }
+
+  Map<String, String> _parseCodexRawEventText(String text) {
+    final regex = RegExp(r'^📡 \[(.+?)\] (.+?) :: (.+)$');
+    final match = regex.firstMatch(text.trim());
+    if (match == null) {
+      return {
+        'channel': 'unknown',
+        'method': 'unknown',
+        'detail': text,
+      };
+    }
+    return {
+      'channel': match.group(1) ?? 'unknown',
+      'method': match.group(2) ?? 'unknown',
+      'detail': match.group(3) ?? '',
+    };
+  }
+
   String _extractCodexEventText(dynamic value, {int depth = 0}) {
     if (value == null || depth > 4) return '';
 
@@ -3305,11 +3433,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         'unknown';
     final params = map['params'] ?? map['eventParams'] ?? payload;
     final text = _extractCodexEventText(params);
+    final kind = _codexEventKind(method);
     final detail = text.isNotEmpty
         ? _truncateForLog(text, maxLength: 220)
         : _safeJsonSnippet(params, maxLength: 220);
 
-    _messages.add(MessageItem('📡 [$channel] $method → $detail',
+    _messages.add(MessageItem('📡 [$channel] $method/$kind :: $detail',
         type: MessageType.codexRawEvent, logLevel: LogLevel.info));
   }
 
@@ -4412,6 +4541,187 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       default:
         return Colors.blueGrey;
     }
+  }
+
+  List<Map<String, dynamic>> _buildDecisionTimelineEntries() {
+    final entries = <Map<String, dynamic>>[];
+
+    for (final approval in _pendingCommandApprovals) {
+      final commandRaw = _approvalCommandRaw(approval);
+      final requestedBy = _approvalRequestedBy(approval);
+      final policy = approval['policy'] as Map<String, dynamic>? ?? {};
+      final riskLevel = policy['risk_level']?.toString() ?? 'unknown';
+      final when =
+          _parseTimestampValue(approval['created_at']) ?? DateTime.now();
+
+      entries.add({
+        'kind': 'approval_pending',
+        'time': when,
+        'title': '승인 대기: $commandRaw',
+        'subtitle': 'by $requestedBy · risk: $riskLevel',
+        'approvalId': approval['approval_id']?.toString(),
+        'payload': approval,
+      });
+    }
+
+    for (final request in _pendingCodexServerRequests) {
+      final title = _codexRequestTitle(request);
+      final summary = _codexRequestSummary(request);
+      final when = _parseTimestampValue(request['timestamp']) ?? DateTime.now();
+
+      entries.add({
+        'kind': 'codex_request_pending',
+        'time': when,
+        'title': '요청 대기: $title',
+        'subtitle': summary.isNotEmpty ? summary : '모바일 응답 필요',
+        'approvalId': null,
+        'payload': request,
+      });
+    }
+
+    for (final event in _recentCommandEvents) {
+      final result = event['result'] as Map<String, dynamic>? ?? {};
+      final command = event['command'] as Map<String, dynamic>? ?? {};
+      final approval = event['approval'] as Map<String, dynamic>? ?? {};
+      final status = result['status']?.toString() ?? 'unknown';
+      final raw = command['raw']?.toString() ?? '(unknown)';
+      final approvalStatus = approval['status']?.toString() ?? 'not_required';
+      final when = _parseTimestampValue(event['timestamp']) ??
+          _parseTimestampValue(event['created_at']) ??
+          DateTime.now();
+
+      entries.add({
+        'kind': 'command_event',
+        'time': when,
+        'title': '실행 결과: $status • $raw',
+        'subtitle': 'approval: $approvalStatus',
+        'approvalId': _extractApprovalIdFromCommandEvent(event),
+        'payload': event,
+      });
+    }
+
+    entries.sort((a, b) {
+      final at = a['time'] as DateTime;
+      final bt = b['time'] as DateTime;
+      return bt.compareTo(at);
+    });
+    return entries;
+  }
+
+  String? _extractApprovalIdFromCommandEvent(Map<String, dynamic> event) {
+    final direct = event['approval_id']?.toString().trim();
+    if (direct != null && direct.isNotEmpty) return direct;
+
+    final metadata = event['metadata'] as Map<String, dynamic>? ?? {};
+    final metadataId = metadata['approval_id']?.toString().trim();
+    if (metadataId != null && metadataId.isNotEmpty) return metadataId;
+
+    final approval = event['approval'] as Map<String, dynamic>? ?? {};
+    final approvalId = approval['approval_id']?.toString().trim();
+    if (approvalId != null && approvalId.isNotEmpty) return approvalId;
+
+    return null;
+  }
+
+  IconData _timelineIcon(String kind, String title) {
+    if (kind == 'approval_pending') return Icons.lock_clock;
+    if (kind == 'codex_request_pending') return Icons.pending_actions;
+    if (title.contains('success')) return Icons.check_circle_outline;
+    if (title.contains('error') || title.contains('cancelled')) {
+      return Icons.error_outline;
+    }
+    return Icons.timeline;
+  }
+
+  String _prettyJson(dynamic payload) {
+    try {
+      const encoder = JsonEncoder.withIndent('  ');
+      return encoder.convert(payload);
+    } catch (_) {
+      return payload?.toString() ?? '(empty)';
+    }
+  }
+
+  Future<void> _showTimelineEntryDetailSheet(Map<String, dynamic> entry) async {
+    if (!mounted) return;
+    final kind = entry['kind']?.toString() ?? 'unknown';
+    final title = entry['title']?.toString() ?? '(untitled)';
+    final subtitle = entry['subtitle']?.toString() ?? '';
+    final time = entry['time'] as DateTime? ?? DateTime.now();
+    final approvalId = entry['approvalId']?.toString();
+    final payload = entry['payload'];
+    final prettyPayload = _prettyJson(payload);
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        final scheme = Theme.of(sheetContext).colorScheme;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: Theme.of(sheetContext)
+                        .textTheme
+                        .titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 6),
+                  Text('kind: $kind',
+                      style: TextStyle(
+                          fontSize: 12, color: scheme.onSurfaceVariant)),
+                  Text('time: ${_formatTime(time)}',
+                      style: TextStyle(
+                          fontSize: 12, color: scheme.onSurfaceVariant)),
+                  if (subtitle.isNotEmpty)
+                    Text('summary: $subtitle',
+                        style: TextStyle(
+                            fontSize: 12, color: scheme.onSurfaceVariant)),
+                  if (approvalId != null && approvalId.isNotEmpty)
+                    Text('approvalId: $approvalId',
+                        style: TextStyle(
+                            fontSize: 12, color: scheme.onSurfaceVariant)),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      FilledButton.tonalIcon(
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(text: prettyPayload));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('타임라인 payload가 복사되었습니다.'),
+                              duration: Duration(seconds: 1),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.copy, size: 16),
+                        label: const Text('Copy payload'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  SelectableText(
+                    prettyPayload,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontFamily: 'monospace',
+                      color: scheme.onSurface,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   /// 대화 메시지만 제거 (시스템/로그 메시지는 유지) - 현재 세션만 표시할 때 사용
@@ -7667,6 +7977,90 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                           ),
                                         );
                                       }),
+                                    const Divider(height: 20),
+                                    Builder(builder: (context) {
+                                      final timelineEntries =
+                                          _buildDecisionTimelineEntries()
+                                              .take(8)
+                                              .toList();
+                                      return Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 12, vertical: 4),
+                                            child: Text(
+                                              'Decision timeline',
+                                              style: TextStyle(
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w600,
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurface,
+                                              ),
+                                            ),
+                                          ),
+                                          if (timelineEntries.isEmpty)
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.fromLTRB(
+                                                      12, 0, 12, 8),
+                                              child: Text(
+                                                '표시할 타임라인이 없습니다.',
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurfaceVariant,
+                                                ),
+                                              ),
+                                            )
+                                          else
+                                            ...timelineEntries.map((entry) {
+                                              final kind =
+                                                  entry['kind']?.toString() ??
+                                                      '';
+                                              final title =
+                                                  entry['title']?.toString() ??
+                                                      '';
+                                              final subtitle = entry['subtitle']
+                                                      ?.toString() ??
+                                                  '';
+                                              final time =
+                                                  entry['time'] as DateTime? ??
+                                                      DateTime.now();
+                                              return ListTile(
+                                                dense: true,
+                                                onTap: () {
+                                                  _showTimelineEntryDetailSheet(
+                                                      entry);
+                                                },
+                                                leading: Icon(
+                                                  _timelineIcon(kind, title),
+                                                  size: 16,
+                                                ),
+                                                title: Text(
+                                                  title,
+                                                  style: const TextStyle(
+                                                      fontSize: 12),
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                                subtitle: Text(
+                                                  '$subtitle · ${_formatTime(time)}',
+                                                  style: const TextStyle(
+                                                      fontSize: 11),
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                              );
+                                            }),
+                                        ],
+                                      );
+                                    }),
                                     const SizedBox(height: 8),
                                   ],
                                 ),
