@@ -1466,6 +1466,7 @@ class CodexHandler {
             .filter((item) => item.model.length > 0);
     }
     async getRuntimeCapabilities() {
+        const startedAt = Date.now();
         const base = {
             provider: "codex",
             ready: false,
@@ -1489,11 +1490,16 @@ class CodexHandler {
             },
         };
         try {
+            const ensureStartedAt = Date.now();
             await this.ensureServerReady();
+            const ensureElapsedMs = Date.now() - ensureStartedAt;
+            const modelListStartedAt = Date.now();
             const modelResult = await this.sendRpcRequest("model/list", { includeHidden: false, limit: 100 }, 15000);
+            const modelListElapsedMs = Date.now() - modelListStartedAt;
             const models = this.parseModelCapabilities(modelResult);
             const defaultModel = models.find((item) => item.isDefault) || models[0] || null;
-            this.log(`[CODEX] runtime capabilities loaded - models: ${models.length}, default: ${defaultModel?.model || "none"}`);
+            const totalElapsedMs = Date.now() - startedAt;
+            this.log(`[CODEX] runtime capabilities loaded - models: ${models.length}, default: ${defaultModel?.model || "none"}, ensureReady=${ensureElapsedMs}ms, modelList=${modelListElapsedMs}ms, total=${totalElapsedMs}ms`);
             if (models.length > 0) {
                 this.log(`[CODEX] runtime capability models: ${models
                     .map((item) => `${item.model}[${item.supportedReasoningEfforts.join("/") || "n/a"}]`)
@@ -1514,7 +1520,9 @@ class CodexHandler {
             };
         }
         catch (error) {
+            const totalElapsedMs = Date.now() - startedAt;
             const errorMessage = error instanceof Error ? error.message : "Unknown capability error";
+            this.logError(`Runtime capability load failed after ${totalElapsedMs}ms`, error);
             this.logError("Failed to load runtime capabilities", error);
             return {
                 ...base,

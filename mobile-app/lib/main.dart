@@ -13,6 +13,7 @@ import 'models/connection_models.dart';
 import 'services/app_settings.dart';
 import 'screens/settings_page.dart';
 import 'widgets/approvals_tab_view.dart';
+import 'widgets/chat_prompt_options_bar.dart';
 import 'widgets/sessions_tab_view.dart';
 import 'widgets/settings_tab_view.dart';
 
@@ -670,6 +671,16 @@ enum HomeTab {
   settings,
 }
 
+enum ModelCatalogLoadStage {
+  idle,
+  loading,
+  defaultReady,
+  syncingAll,
+  completed,
+  delayed,
+  failed,
+}
+
 class MessageItem {
   final String text;
   final String type; // MessageType 상수 사용
@@ -729,6 +740,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   String? _currentClientId; // 현재 클라이언트 ID
   Timer? _pollTimer;
   Timer? _capabilitiesLoadTimer;
+  Timer? _capabilitiesStageTimer;
+  Timer? _capabilitiesFollowupTimer;
   bool _isRelayPollInFlight = false;
 
   // 스트리밍 관련
@@ -826,6 +839,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       List<Map<String, dynamic>>.from(_fallbackModels);
   bool _supportsIdeContext = false;
   bool _supportsFlatMode = false;
+  bool _capabilitiesFromCache = false;
+  ModelCatalogLoadStage _modelCatalogLoadStage = ModelCatalogLoadStage.idle;
+  int _capabilitiesFollowupAttempts = 0;
+  static const int _maxCapabilitiesFollowupAttempts = 3;
+  DateTime? _runtimeCapabilitiesRequestedAt;
   String? _actualSelectedMode; // 자동 모드로 선택된 경우 실제 선택된 모드 (null이면 사용자가 직접 선택)
   MessageItem? _lastUserPrompt; // 마지막 User Prompt 메시지 (모드 업데이트용)
 
@@ -1034,10 +1052,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _lastConnectionError = null;
         _capabilitiesLoaded = false;
         _capabilitiesLoading = false;
+        _capabilitiesFromCache = false;
+        _modelCatalogLoadStage = ModelCatalogLoadStage.idle;
+        _capabilitiesFollowupAttempts = 0;
+        _runtimeCapabilitiesRequestedAt = null;
         _supportsIdeContext = false;
         _supportsFlatMode = false;
         _useIdeContext = false;
         _useFlatMode = false;
+        _cancelCapabilitiesSequenceTimers();
         _stopReconnect();
         _messages.add(MessageItem(
             '✅ Connected to Extension WebSocket server at $ip:$port',
@@ -1198,8 +1221,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             }
           } else {
             if (data['command_type'] == 'get_runtime_capabilities') {
-              _capabilitiesLoadTimer?.cancel();
               _capabilitiesLoading = false;
+              _modelCatalogLoadStage = ModelCatalogLoadStage.failed;
+              _runtimeCapabilitiesRequestedAt = null;
+              _cancelCapabilitiesSequenceTimers();
             }
             _messages.add(MessageItem('❌ Command failed: ${data['error']}',
                 type: MessageType.system));
@@ -1451,10 +1476,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           _lastCommandMetaRefreshAt = null;
           _capabilitiesLoaded = false;
           _capabilitiesLoading = false;
+          _capabilitiesFromCache = false;
+          _modelCatalogLoadStage = ModelCatalogLoadStage.idle;
+          _capabilitiesFollowupAttempts = 0;
+          _runtimeCapabilitiesRequestedAt = null;
           _supportsIdeContext = false;
           _supportsFlatMode = false;
           _useIdeContext = false;
           _useFlatMode = false;
+          _cancelCapabilitiesSequenceTimers();
           _stopReconnect();
           _messages.add(MessageItem('✅ Connected to session $sessionId',
               type: MessageType.system));
@@ -1743,8 +1773,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           }
         } else {
           if (messageData['command_type'] == 'get_runtime_capabilities') {
-            _capabilitiesLoadTimer?.cancel();
             _capabilitiesLoading = false;
+            _modelCatalogLoadStage = ModelCatalogLoadStage.failed;
+            _runtimeCapabilitiesRequestedAt = null;
+            _cancelCapabilitiesSequenceTimers();
           }
           _messages.add(MessageItem('❌ Command failed: ${messageData['error']}',
               type: MessageType.system));
@@ -2130,6 +2162,105 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return model;
   }
 
+  String _getReasoningEffortDisplayName(String effort) {
+    final normalized = effort.trim();
+    if (normalized.isEmpty || normalized == 'auto') return 'Auto';
+    return '${normalized[0].toUpperCase()}${normalized.substring(1)}';
+  }
+
+  String get _modelCatalogLoadingText {
+    switch (_modelCatalogLoadStage) {
+      case ModelCatalogLoadStage.loading:
+        return '모델 목록을 불러오는 중...';
+      case ModelCatalogLoadStage.defaultReady:
+        return '기본 모델 로딩 성공. 전체 모델을 준비 중...';
+      case ModelCatalogLoadStage.syncingAll:
+        return '이후 모든 모델을 불러오고 있습니다...';
+      case ModelCatalogLoadStage.delayed:
+        return '전체 모델 동기화가 지연되어 기본 모델을 사용 중입니다.';
+      case ModelCatalogLoadStage.failed:
+        return '모델 목록 로딩에 실패했어요. 다시 시도해 주세요.';
+      case ModelCatalogLoadStage.completed:
+      case ModelCatalogLoadStage.idle:
+        return '모델 목록을 불러오는 중...';
+    }
+  }
+
+  void _cancelCapabilitiesSequenceTimers() {
+    _capabilitiesLoadTimer?.cancel();
+    _capabilitiesStageTimer?.cancel();
+    _capabilitiesFollowupTimer?.cancel();
+  }
+
+  void _armCapabilitiesLoadTimeout() {
+    _capabilitiesLoadTimer?.cancel();
+    _capabilitiesLoadTimer = Timer(const Duration(seconds: 4), () {
+      if (!mounted || !_capabilitiesLoading || _capabilitiesLoaded) return;
+      final shouldNotify =
+          _modelCatalogLoadStage != ModelCatalogLoadStage.delayed;
+      setState(() {
+        _modelCatalogLoadStage = ModelCatalogLoadStage.delayed;
+        if (shouldNotify) {
+          final elapsedSec = _runtimeCapabilitiesRequestedAt == null
+              ? null
+              : DateTime.now()
+                  .difference(_runtimeCapabilitiesRequestedAt!)
+                  .inSeconds;
+          _messages.add(MessageItem(
+              elapsedSec == null
+                  ? '⚠️ 전체 모델 로딩이 지연되어 기본 모델로 먼저 사용할게요.'
+                  : '⚠️ 전체 모델 로딩이 ${elapsedSec}초 이상 지연되어 기본 모델로 먼저 사용할게요.',
+              type: MessageType.system));
+        }
+      });
+      if (_capabilitiesFollowupAttempts < _maxCapabilitiesFollowupAttempts) {
+        _scheduleCapabilitiesFollowupLoad();
+        _armCapabilitiesLoadTimeout();
+      }
+    });
+  }
+
+  void _startCapabilitiesLoadSequence() {
+    _capabilitiesStageTimer?.cancel();
+    _capabilitiesStageTimer = Timer(const Duration(milliseconds: 450), () {
+      if (!mounted || !_capabilitiesLoading || _capabilitiesLoaded) return;
+      final defaultModelLabel =
+          _getModelDisplayName(_getDefaultModelFromCapabilities());
+      setState(() {
+        _modelCatalogLoadStage = ModelCatalogLoadStage.defaultReady;
+        _messages.add(MessageItem('✅ 기본 모델 로딩 성공: $defaultModelLabel',
+            type: MessageType.system));
+      });
+      _capabilitiesStageTimer = Timer(const Duration(milliseconds: 700), () {
+        if (!mounted || !_capabilitiesLoading || _capabilitiesLoaded) return;
+        setState(() {
+          _modelCatalogLoadStage = ModelCatalogLoadStage.syncingAll;
+          _messages.add(MessageItem('🔄 이후 모든 모델을 불러오고 있습니다...',
+              type: MessageType.system));
+        });
+      });
+    });
+  }
+
+  void _scheduleCapabilitiesFollowupLoad() {
+    if (!_isConnected ||
+        _capabilitiesFollowupAttempts >= _maxCapabilitiesFollowupAttempts) {
+      return;
+    }
+    _capabilitiesFollowupAttempts += 1;
+    _capabilitiesFollowupTimer?.cancel();
+    _capabilitiesFollowupTimer = Timer(const Duration(milliseconds: 900), () {
+      if (!mounted || !_isConnected || _capabilitiesLoaded) return;
+      unawaited(
+          _sendCommand('get_runtime_capabilities', clientId: _currentClientId));
+      if (_connectionType == ConnectionType.relay) {
+        Future.delayed(const Duration(milliseconds: 120), () {
+          unawaited(_pollRelayMessagesOnce());
+        });
+      }
+    });
+  }
+
   void _applyRuntimeCapabilities(Map<String, dynamic> capabilities) {
     final rawAgentModes = capabilities['agentModes'];
     final rawModels = capabilities['models'];
@@ -2220,15 +2351,65 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       return;
     }
 
-    _capabilitiesLoadTimer?.cancel();
-    _capabilitiesLoading = false;
+    final wasLoaded = _capabilitiesLoaded;
+    final wasLoading = _capabilitiesLoading;
+    final previousModelCount = _availableModels.length;
     _applyRuntimeCapabilities(data);
-    _messages.add(MessageItem(
-      '🧩 Runtime capabilities loaded: ${_availableModels.length} model(s), '
-      'IDE context ${_supportsIdeContext ? 'enabled' : 'unsupported'}, '
-      'flat mode ${_supportsFlatMode ? 'enabled' : 'unsupported'}',
-      type: MessageType.system,
-    ));
+    if (_capabilitiesLoaded) {
+      _cancelCapabilitiesSequenceTimers();
+      _capabilitiesLoading = false;
+      _capabilitiesFromCache = false;
+      _capabilitiesFollowupAttempts = 0;
+      _modelCatalogLoadStage = ModelCatalogLoadStage.completed;
+      if (wasLoading || !wasLoaded) {
+        final defaultModelLabel =
+            _getModelDisplayName(_getDefaultModelFromCapabilities());
+        final elapsedMs = _runtimeCapabilitiesRequestedAt == null
+            ? null
+            : DateTime.now()
+                .difference(_runtimeCapabilitiesRequestedAt!)
+                .inMilliseconds;
+        _messages.add(MessageItem(
+          elapsedMs == null
+              ? '🔔 전체 모델 로딩 완료: ${_availableModels.length}개 '
+                  '(기본: $defaultModelLabel)'
+              : '🔔 전체 모델 로딩 완료: ${_availableModels.length}개 '
+                  '(기본: $defaultModelLabel, ${elapsedMs}ms)',
+          type: MessageType.system,
+        ));
+        if (previousModelCount > 0 &&
+            previousModelCount != _availableModels.length) {
+          _messages.add(MessageItem(
+              '🔁 모델 목록 갱신: $previousModelCount개 → ${_availableModels.length}개',
+              type: MessageType.system));
+        }
+      }
+      unawaited(AppSettings().saveRuntimeCapabilitiesCache(
+        Map<String, dynamic>.from(data),
+      ));
+      _runtimeCapabilitiesRequestedAt = null;
+      _messages.add(MessageItem(
+        '🧩 Runtime capabilities loaded: ${_availableModels.length} model(s), '
+        'IDE context ${_supportsIdeContext ? 'enabled' : 'unsupported'}, '
+        'flat mode ${_supportsFlatMode ? 'enabled' : 'unsupported'}',
+        type: MessageType.system,
+      ));
+      return;
+    }
+
+    _capabilitiesLoading = true;
+    _capabilitiesFromCache = false;
+    _modelCatalogLoadStage = ModelCatalogLoadStage.syncingAll;
+    if (wasLoading && _capabilitiesFollowupAttempts == 0) {
+      final defaultModelLabel =
+          _getModelDisplayName(_getDefaultModelFromCapabilities());
+      _messages.add(MessageItem('✅ 기본 모델 로딩 성공: $defaultModelLabel',
+          type: MessageType.system));
+      _messages.add(
+          MessageItem('🔄 이후 모든 모델을 불러오고 있습니다...', type: MessageType.system));
+    }
+    _armCapabilitiesLoadTimeout();
+    _scheduleCapabilitiesFollowupLoad();
   }
 
   // 텍스트 내용을 분석하여 적절한 에이전트 모드 자동 선택 (Extension의 detectAgentMode와 동일한 로직)
@@ -2330,7 +2511,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _stopPolling();
     _cancelAllAutoDecisionTimers();
     _stopReconnect(); // 재연결 중지
-    _capabilitiesLoadTimer?.cancel();
+    _cancelCapabilitiesSequenceTimers();
 
     // 로컬 WebSocket 연결 종료
     _localWebSocket?.sink.close();
@@ -2350,6 +2531,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _lastCommandMetaRefreshAt = null;
         _capabilitiesLoaded = false;
         _capabilitiesLoading = false;
+        _capabilitiesFromCache = false;
+        _modelCatalogLoadStage = ModelCatalogLoadStage.idle;
+        _capabilitiesFollowupAttempts = 0;
+        _runtimeCapabilitiesRequestedAt = null;
         _supportsIdeContext = false;
         _supportsFlatMode = false;
         _useIdeContext = false;
@@ -2408,6 +2593,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _isReconnecting = false;
+  }
+
+  void _forceStopReconnect() {
+    if (!_isReconnecting && _reconnectTimer == null) return;
+    _stopReconnect();
+    if (!mounted) return;
+    setState(() {
+      _messages.add(
+        MessageItem(
+          '⏹️ 자동 재연결을 중지했습니다. 필요하면 다시 연결해주세요.',
+          type: MessageType.system,
+        ),
+      );
+    });
   }
 
   // 수동 재연결
@@ -3304,23 +3503,23 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         },
       );
 
-      final androidPlugin = _localNotificationsPlugin
-          .resolvePlatformSpecificImplementation<
+      final androidPlugin =
+          _localNotificationsPlugin.resolvePlatformSpecificImplementation<
               AndroidFlutterLocalNotificationsPlugin>();
       await androidPlugin
           ?.createNotificationChannel(_approvalNotificationChannel);
       await androidPlugin?.requestNotificationsPermission();
 
-      final iosPlugin = _localNotificationsPlugin
-          .resolvePlatformSpecificImplementation<
+      final iosPlugin =
+          _localNotificationsPlugin.resolvePlatformSpecificImplementation<
               IOSFlutterLocalNotificationsPlugin>();
       await iosPlugin?.requestPermissions(
         alert: true,
         badge: true,
         sound: true,
       );
-      final macosPlugin = _localNotificationsPlugin
-          .resolvePlatformSpecificImplementation<
+      final macosPlugin =
+          _localNotificationsPlugin.resolvePlatformSpecificImplementation<
               MacOSFlutterLocalNotificationsPlugin>();
       await macosPlugin?.requestPermissions(
         alert: true,
@@ -3332,8 +3531,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _messages.add(
-            MessageItem('⚠️ 알림 초기화 실패: $e', type: MessageType.system));
+        _messages
+            .add(MessageItem('⚠️ 알림 초기화 실패: $e', type: MessageType.system));
       });
     }
   }
@@ -3369,7 +3568,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
 
     if (!emitSystemMessage) return;
-    if (nextReachable && _connectionType == ConnectionType.relay && _isConnected) {
+    if (nextReachable &&
+        _connectionType == ConnectionType.relay &&
+        _isConnected) {
       unawaited(_loadCommandApprovals(silent: true));
       unawaited(_loadCommandEvents(silent: true));
     }
@@ -3657,22 +3858,39 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (!_isConnected) return;
 
     try {
+      final cached = await AppSettings().getRuntimeCapabilitiesCache(
+        maxAge: const Duration(hours: 24),
+      );
+      _cancelCapabilitiesSequenceTimers();
       setState(() {
         _capabilitiesLoading = true;
-        _messages.add(MessageItem(
-            '🛰️ Requesting runtime capabilities from extension...',
-            type: MessageType.system));
-      });
-      _capabilitiesLoadTimer?.cancel();
-      _capabilitiesLoadTimer = Timer(const Duration(seconds: 4), () {
-        if (!mounted || !_capabilitiesLoading || _capabilitiesLoaded) return;
-        setState(() {
-          _capabilitiesLoading = false;
+        _capabilitiesFollowupAttempts = 0;
+        _runtimeCapabilitiesRequestedAt = DateTime.now();
+        if (cached != null) {
+          _applyRuntimeCapabilities(cached.capabilities);
+          _capabilitiesLoaded = true;
+          _capabilitiesFromCache = true;
+          _modelCatalogLoadStage = ModelCatalogLoadStage.syncingAll;
+          final ageMinutes =
+              DateTime.now().difference(cached.cachedAt).inMinutes;
           _messages.add(MessageItem(
-              '⚠️ Capability load delayed. Falling back to cached/default UI.',
+              '📦 캐시된 모델 ${_availableModels.length}개 적용 '
+              '(약 ${ageMinutes}분 전)',
               type: MessageType.system));
-        });
+          _messages.add(
+              MessageItem('🔄 최신 모델 목록을 동기화하는 중...', type: MessageType.system));
+        } else {
+          _capabilitiesLoaded = false;
+          _capabilitiesFromCache = false;
+          _modelCatalogLoadStage = ModelCatalogLoadStage.loading;
+          _messages.add(
+              MessageItem('🛰️ 모델 목록을 불러오는 중...', type: MessageType.system));
+        }
       });
+      if (cached == null) {
+        _startCapabilitiesLoadSequence();
+      }
+      _armCapabilitiesLoadTimeout();
       await _sendCommand('get_runtime_capabilities',
           clientId: _currentClientId);
       if (_connectionType == ConnectionType.relay) {
@@ -3681,7 +3899,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         });
       }
     } catch (e) {
-      // 에러는 조용히 무시
+      if (!mounted) return;
+      setState(() {
+        _cancelCapabilitiesSequenceTimers();
+        _capabilitiesLoading = false;
+        _modelCatalogLoadStage = ModelCatalogLoadStage.failed;
+        _runtimeCapabilitiesRequestedAt = null;
+        _messages
+            .add(MessageItem('❌ 모델 목록 로딩 실패: $e', type: MessageType.system));
+      });
     }
   }
 
@@ -5444,7 +5670,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _scrollController.removeListener(_updateScrollButtonVisibility);
     WidgetsBinding.instance.removeObserver(this);
     AppSettings().removeListener(_onAppSettingsChanged);
-    _capabilitiesLoadTimer?.cancel();
+    _cancelCapabilitiesSequenceTimers();
     _connectivitySubscription?.cancel();
     _stopPolling();
     _localWebSocket?.sink.close();
@@ -5679,6 +5905,36 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Widget _buildChatGptLikeBody() {
+    final selectedModelValue = _selectedModel == 'auto' ||
+            _availableModels.any((item) =>
+                (item['model'] ?? '').toString().trim() == _selectedModel)
+        ? _selectedModel
+        : 'auto';
+    final selectedReasoningValue = _selectedReasoningEffort == 'auto' ||
+            _getAvailableReasoningEffortsForModel(_selectedModel)
+                .contains(_selectedReasoningEffort)
+        ? _selectedReasoningEffort
+        : 'auto';
+    final modelItems = <PromptOptionItem>[
+      const PromptOptionItem(value: 'auto', label: 'Auto (기본값)'),
+      ..._availableModels.map((item) {
+        final model = (item['model'] ?? '').toString().trim();
+        return PromptOptionItem(
+          value: model,
+          label: _getModelDisplayName(model),
+        );
+      }),
+    ];
+    final reasoningItems = <PromptOptionItem>[
+      const PromptOptionItem(value: 'auto', label: 'Auto'),
+      ..._getAvailableReasoningEffortsForModel(_selectedModel).map(
+        (effort) => PromptOptionItem(
+          value: effort,
+          label: _getReasoningEffortDisplayName(effort),
+        ),
+      ),
+    ];
+
     return Column(
       children: [
         Expanded(
@@ -5700,43 +5956,79 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 ),
               ),
             ),
-            child: Row(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(
-                  child: TextField(
-                    controller: _commandController,
-                    focusNode: _commandFocusNode,
-                    minLines: 1,
-                    maxLines: 4,
-                    textInputAction: TextInputAction.send,
-                    decoration: InputDecoration(
-                      hintText: _isWaitingForResponse
-                          ? '응답 생성 중...'
-                          : '메시지를 입력하세요',
-                      filled: true,
-                      fillColor:
-                          Theme.of(context).colorScheme.surfaceContainerHighest,
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 12),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(26),
-                        borderSide: BorderSide.none,
-                      ),
-                    ),
-                    onSubmitted: (_) {
-                      unawaited(_submitPromptFromInput(newSession: false));
-                    },
-                  ),
+                ChatPromptOptionsBar(
+                  showLoading: _capabilitiesLoading && !_capabilitiesLoaded,
+                  loadingLabel: _modelCatalogLoadingText,
+                  selectedModelLabel: _getModelDisplayName(selectedModelValue),
+                  selectedReasoningLabel:
+                      _getReasoningEffortDisplayName(selectedReasoningValue),
+                  modelItems: modelItems,
+                  reasoningItems: reasoningItems,
+                  onModelSelected: (value) {
+                    setState(() {
+                      _selectedModel = _normalizeModel(value);
+                      _selectedReasoningEffort = _normalizeReasoningEffort(
+                          _selectedReasoningEffort, _selectedModel);
+                    });
+                    unawaited(AppSettings().setDefaultModel(_selectedModel));
+                  },
+                  onReasoningSelected: (value) {
+                    setState(() {
+                      _selectedReasoningEffort =
+                          _normalizeReasoningEffort(value, _selectedModel);
+                    });
+                    unawaited(
+                      AppSettings()
+                          .setDefaultReasoningEffort(_selectedReasoningEffort),
+                    );
+                  },
                 ),
-                const SizedBox(width: 8),
-                IconButton.filled(
-                  onPressed: _isWaitingForResponse
-                      ? null
-                      : () {
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _commandController,
+                        focusNode: _commandFocusNode,
+                        minLines: 1,
+                        maxLines: 4,
+                        textInputAction: TextInputAction.send,
+                        decoration: InputDecoration(
+                          hintText: _isWaitingForResponse
+                              ? '응답 생성 중...'
+                              : '메시지를 입력하세요',
+                          filled: true,
+                          fillColor: Theme.of(context)
+                              .colorScheme
+                              .surfaceContainerHighest,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 12),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(26),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                        onSubmitted: (_) {
                           unawaited(_submitPromptFromInput(newSession: false));
                         },
-                  icon: const Icon(Icons.arrow_upward),
-                  tooltip: '보내기',
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton.filled(
+                      onPressed: _isWaitingForResponse
+                          ? null
+                          : () {
+                              unawaited(
+                                  _submitPromptFromInput(newSession: false));
+                            },
+                      icon: const Icon(Icons.arrow_upward),
+                      tooltip: '보내기',
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -5882,6 +6174,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     label: Text(_isReconnecting ? '연결 시도 중...' : '연결하기'),
                   ),
                 ),
+                if (_isReconnecting) ...[
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _forceStopReconnect,
+                      icon: const Icon(Icons.stop_circle_outlined),
+                      label: const Text('자동 재연결 중지'),
+                    ),
+                  ),
+                ],
                 if (_lastConnectionError != null) ...[
                   const SizedBox(height: 10),
                   Text(
@@ -6775,7 +7078,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                             ),
                                           ),
                                           TextButton(
-                                            onPressed: _stopReconnect,
+                                            onPressed: _forceStopReconnect,
                                             child: const Text('취소',
                                                 style: TextStyle(fontSize: 12)),
                                           ),
@@ -7496,7 +7799,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                       const SizedBox(width: 10),
                                       Expanded(
                                         child: Text(
-                                          '모델 목록을 불러오는 중...',
+                                          _modelCatalogLoadingText,
                                           style: TextStyle(
                                             fontSize: 12,
                                             color: Theme.of(context)
@@ -7707,9 +8010,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                         borderRadius: BorderRadius.circular(10),
                                       ),
                                       child: Text(
-                                        _capabilitiesLoaded
-                                            ? 'Capabilities loaded'
-                                            : 'Using fallback capabilities',
+                                        _capabilitiesFromCache
+                                            ? 'Using cached capabilities'
+                                            : _capabilitiesLoaded
+                                                ? 'Capabilities loaded'
+                                                : 'Using fallback capabilities',
                                         style: TextStyle(
                                           fontSize: 11,
                                           color: Theme.of(context)

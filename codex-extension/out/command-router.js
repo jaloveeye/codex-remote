@@ -291,11 +291,13 @@ class CommandRouter {
      */
     async handleGetRuntimeCapabilities() {
         this.log("Fetching runtime capabilities from Codex handler");
+        const startedAt = Date.now();
         const capabilities = await this.commandHandler.getRuntimeCapabilities();
+        const elapsedMs = Date.now() - startedAt;
         const models = Array.isArray(capabilities?.models)
             ? capabilities.models
             : [];
-        this.log(`Runtime capabilities ready=${capabilities?.ready === true}, models=${models.length}`);
+        this.log(`Runtime capabilities ready=${capabilities?.ready === true}, models=${models.length}, elapsed=${elapsedMs}ms`);
         return { success: true, data: capabilities };
     }
     /**
