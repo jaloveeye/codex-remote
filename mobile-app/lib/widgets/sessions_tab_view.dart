@@ -11,14 +11,11 @@ class SessionsTabView extends StatelessWidget {
     required this.sessionId,
     required this.currentCodexSessionId,
     required this.connectionHistory,
-    required this.availableSessions,
-    required this.chatHistory,
     required this.subtitle,
     required this.onRefresh,
     required this.onDisconnect,
     required this.onOpenChat,
     required this.onConnectFromHistory,
-    required this.onLoadChatHistory,
   });
 
   final bool isConnected;
@@ -26,14 +23,11 @@ class SessionsTabView extends StatelessWidget {
   final String? sessionId;
   final String? currentCodexSessionId;
   final List<ConnectionHistoryItem> connectionHistory;
-  final List<String> availableSessions;
-  final List<Map<String, dynamic>> chatHistory;
   final String subtitle;
   final VoidCallback onRefresh;
   final VoidCallback onDisconnect;
   final VoidCallback onOpenChat;
   final void Function(ConnectionHistoryItem item) onConnectFromHistory;
-  final void Function({String? sessionId}) onLoadChatHistory;
 
   @override
   Widget build(BuildContext context) {
@@ -147,59 +141,6 @@ class SessionsTabView extends StatelessWidget {
               }).toList(),
             ),
           ),
-        const SizedBox(height: 12),
-        Text(
-          '세션 히스토리',
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w700,
-            color: Theme.of(context).colorScheme.onSurface,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Card(
-          child: Column(
-            children: [
-              if (availableSessions.isEmpty)
-                const ListTile(
-                  leading: Icon(Icons.chat_bubble_outline),
-                  title: Text('사용 가능한 세션이 없습니다'),
-                  subtitle: Text('연결 후 세션 정보가 표시됩니다.'),
-                )
-              else
-                ...availableSessions.take(8).map((sessionId) => ListTile(
-                      leading: const Icon(Icons.chat_outlined),
-                      title: Text(sessionId),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.refresh, size: 18),
-                        onPressed: () =>
-                            onLoadChatHistory(sessionId: sessionId),
-                      ),
-                    )),
-              if (chatHistory.isNotEmpty) const Divider(height: 1),
-              if (chatHistory.isNotEmpty)
-                ...chatHistory.take(6).map((entry) {
-                  final userMsg =
-                      (entry['userMessage'] as String? ?? '').trim();
-                  final assistantMsg =
-                      (entry['assistantResponse'] as String? ?? '').trim();
-                  return ListTile(
-                    leading: const Icon(Icons.forum_outlined),
-                    title: Text(
-                      userMsg.isEmpty ? '(no prompt)' : userMsg,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: Text(
-                      assistantMsg.isEmpty ? '응답 없음' : assistantMsg,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  );
-                }),
-            ],
-          ),
-        ),
       ],
     );
   }

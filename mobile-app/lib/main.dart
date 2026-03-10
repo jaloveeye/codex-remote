@@ -794,6 +794,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Timer? _reconnectTimer;
   int _reconnectAttempts = 0;
   bool _isReconnecting = false;
+  bool _isConnectionActionInProgress = false;
+  String? _connectionActionLabel;
   String? _lastConnectionError;
 
   // 런타임 옵션 관련
@@ -1374,50 +1376,79 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       context: context,
       barrierDismissible: false,
       useSafeArea: true,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('PIN 입력'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                '이 세션은 PC에서 PIN 보호가 설정되어 있습니다.\nPC에서 설정한 4~6자리 숫자 PIN을 입력하세요.',
-                style: TextStyle(fontSize: 14),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: controller,
-                keyboardType: TextInputType.text,
-                obscureText: true,
-                maxLength: 6,
-                autofocus: true,
-                textInputAction: TextInputAction.done,
-                onSubmitted: (_) => navigator.pop(controller.text.trim()),
-                inputFormatters: [
-                  FilteringTextInputFormatter.digitsOnly,
+      builder: (dialogContext) {
+        var isSubmitting = false;
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) => AlertDialog(
+            title: const Text('PIN 입력'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '이 세션은 PC에서 PIN 보호가 설정되어 있습니다.\nPC에서 설정한 4~6자리 숫자 PIN을 입력하세요.',
+                    style: TextStyle(fontSize: 14),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: controller,
+                    keyboardType: TextInputType.text,
+                    obscureText: true,
+                    maxLength: 6,
+                    autofocus: true,
+                    textInputAction: TextInputAction.done,
+                    enabled: !isSubmitting,
+                    onSubmitted: (_) async {
+                      final value = controller.text.trim();
+                      if (value.length < 4 || value.length > 6) return;
+                      setDialogState(() => isSubmitting = true);
+                      await Future<void>.delayed(
+                          const Duration(milliseconds: 140));
+                      if (ctx.mounted) navigator.pop(value);
+                    },
+                    inputFormatters: [
+                      FilteringTextInputFormatter.digitsOnly,
+                    ],
+                    decoration: const InputDecoration(
+                      labelText: 'PIN',
+                      hintText: '4~6자리 숫자',
+                      counterText: '',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
                 ],
-                decoration: const InputDecoration(
-                  labelText: 'PIN',
-                  hintText: '4~6자리 숫자',
-                  counterText: '',
-                  border: OutlineInputBorder(),
-                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: isSubmitting ? null : () => navigator.pop(null),
+                child: const Text('취소'),
+              ),
+              FilledButton.icon(
+                onPressed: isSubmitting
+                    ? null
+                    : () async {
+                        final value = controller.text.trim();
+                        if (value.length < 4 || value.length > 6) return;
+                        setDialogState(() => isSubmitting = true);
+                        await Future<void>.delayed(
+                            const Duration(milliseconds: 140));
+                        if (ctx.mounted) navigator.pop(value);
+                      },
+                icon: isSubmitting
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.check),
+                label: Text(isSubmitting ? '확인 중...' : '확인'),
               ),
             ],
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => navigator.pop(null),
-            child: const Text('취소'),
-          ),
-          FilledButton(
-            onPressed: () => navigator.pop(controller.text.trim()),
-            child: const Text('확인'),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -1532,15 +1563,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         // PC가 PIN을 설정한 세션 → PIN 입력 후 재시도
         if (!mounted) return;
         setState(() {
+          _connectionActionLabel = 'PIN 입력 대기 중...';
           _messages.add(MessageItem('이 세션은 PIN이 필요합니다. PIN을 입력하세요.',
               type: MessageType.system));
         });
         final enteredPin = await _showPinDialog();
         if (!mounted) return;
         if (enteredPin != null && enteredPin.isNotEmpty) {
+          setState(() => _connectionActionLabel = 'PIN 확인 후 연결 중...');
           await _connectToSession(sessionId, enteredPin);
         } else {
           setState(() {
+            _connectionActionLabel = null;
             _messages.add(MessageItem('PIN을 입력하지 않아 연결하지 않았습니다.',
                 type: MessageType.system));
           });
@@ -1601,10 +1635,36 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
-  void _connect() {
+  Future<void> _connect() async {
+    if (_isConnectionActionInProgress || _isConnected || _isReconnecting) {
+      return;
+    }
+
+    setState(() {
+      _isConnectionActionInProgress = true;
+      _connectionActionLabel = _connectionType == ConnectionType.local
+          ? '로컬 서버 연결 준비 중...'
+          : '릴레이 세션 연결 준비 중...';
+      _lastConnectionError = null;
+    });
+
     if (_connectionType == ConnectionType.local) {
       // 로컬 서버 연결
-      _connectToLocal();
+      try {
+        setState(() => _connectionActionLabel = '로컬 서버 연결 요청 중...');
+        await _connectToLocal();
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isConnectionActionInProgress = false;
+            if (_isConnected || _isReconnecting) {
+              _connectionActionLabel = null;
+            } else {
+              _connectionActionLabel = '연결 요청이 완료되지 않았습니다.';
+            }
+          });
+        }
+      }
     } else {
       // 릴레이 서버 연결: 무조건 익스텐션에서 먼저 활성화 후 세션 ID 입력
       final sessionId = _sessionIdController.text.trim();
@@ -1618,10 +1678,28 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               duration: Duration(seconds: 5),
             ),
           );
+          setState(() {
+            _isConnectionActionInProgress = false;
+            _connectionActionLabel = null;
+          });
         }
         return;
       }
-      _connectToSession(sessionId);
+      try {
+        setState(() => _connectionActionLabel = '릴레이 세션 연결 요청 중...');
+        await _connectToSession(sessionId);
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isConnectionActionInProgress = false;
+            if (_isConnected || _isReconnecting) {
+              _connectionActionLabel = null;
+            } else {
+              _connectionActionLabel = '연결 요청이 완료되지 않았습니다.';
+            }
+          });
+        }
+      }
     }
   }
 
@@ -1640,7 +1718,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     });
 
     // 연결 시도
-    _connect();
+    unawaited(_connect());
   }
 
   // 메시지 폴링 시작
@@ -2168,6 +2246,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return '${normalized[0].toUpperCase()}${normalized.substring(1)}';
   }
 
+  String _restoreSavedSelectionValue(String value) {
+    final normalized = value.trim();
+    return normalized.isEmpty ? 'auto' : normalized;
+  }
+
   String get _modelCatalogLoadingText {
     switch (_modelCatalogLoadStage) {
       case ModelCatalogLoadStage.loading:
@@ -2522,6 +2605,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _isConnected = false;
         _sessionId = null;
         _isReconnecting = false;
+        _isConnectionActionInProgress = false;
+        _connectionActionLabel = null;
         _reconnectAttempts = 0;
         _pendingCommandApprovals = [];
         _pendingCodexServerRequests = [];
@@ -2613,7 +2698,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void _manualReconnect() {
     _stopReconnect();
     _reconnectAttempts = 0;
-    _connect();
+    unawaited(_connect());
   }
 
   Future<void> _sendCommand(String type,
@@ -2790,10 +2875,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       type: MessageType.system));
                   // _isWaitingForResponse는 이미 true, 유지
                 } else if (policyDecision == 'approval_required') {
+                  final needsAssistantResponse =
+                      prompt == true && execute == true;
                   _messages.add(MessageItem(
-                      '⏳ 승인 필요: $approvalId (risk: $riskLevel)',
+                      needsAssistantResponse
+                          ? '⏳ 승인 필요: $approvalId (risk: $riskLevel) · 승인 후 응답을 계속 대기합니다.'
+                          : '⏳ 승인 필요: $approvalId (risk: $riskLevel)',
                       type: MessageType.system));
-                  _isWaitingForResponse = false;
+                  _isWaitingForResponse = needsAssistantResponse;
                 } else if (policyDecision == 'deny') {
                   _messages.add(MessageItem(
                       '🚫 정책 차단: ${responseData?['error'] ?? 'command denied'}',
@@ -3468,9 +3557,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _loadConnectionSettings();
     // 설정에서 기본 프롬프트 옵션 적용
     _selectedAgentMode = 'auto';
-    _selectedModel = _normalizeModel(AppSettings().defaultModel);
+    _selectedModel = _restoreSavedSelectionValue(AppSettings().defaultModel);
     _selectedReasoningEffort =
-        _normalizeReasoningEffort(AppSettings().defaultReasoningEffort);
+        _restoreSavedSelectionValue(AppSettings().defaultReasoningEffort);
     // 설정 변경 리스너 추가
     AppSettings().addListener(_onAppSettingsChanged);
     _scrollController.addListener(_updateScrollButtonVisibility);
@@ -3647,9 +3736,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       setState(() {
         // 설정 변경 시 UI 업데이트 (히스토리/기본 프롬프트 옵션 등)
         _selectedAgentMode = 'auto';
-        _selectedModel = _normalizeModel(settings.defaultModel);
+        _selectedModel = _restoreSavedSelectionValue(settings.defaultModel);
         _selectedReasoningEffort =
-            _normalizeReasoningEffort(settings.defaultReasoningEffort);
+            _restoreSavedSelectionValue(settings.defaultReasoningEffort);
       });
     }
   }
@@ -4141,6 +4230,38 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  Widget _approvalMetaChip({
+    required String label,
+    required String value,
+    Color? valueColor,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: RichText(
+        text: TextSpan(
+          style: TextStyle(
+            fontSize: 11,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+          children: [
+            TextSpan(text: '$label: '),
+            TextSpan(
+              text: value,
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                color: valueColor ?? Theme.of(context).colorScheme.onSurface,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   String _codexEventKind(String method) {
     final normalized = method.toLowerCase();
     if (normalized.contains('plan/')) return 'plan';
@@ -4346,6 +4467,64 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return policy['rule_id']?.toString().trim() ?? '';
   }
 
+  bool _approvalNeedsAssistantResponse(Map<String, dynamic> approval) {
+    final commandData = _approvalCommandData(approval);
+    final isPrompt = commandData['prompt'] == true;
+    final shouldExecute = commandData['execute'] == true;
+    return isPrompt && shouldExecute;
+  }
+
+  List<Map<String, dynamic>> _buildResolvedApprovalHistoryEntries(
+      {int limit = 20}) {
+    final entries = <Map<String, dynamic>>[];
+    final seen = <String>{};
+
+    for (final event in _recentCommandEvents) {
+      final approval = event['approval'] as Map<String, dynamic>? ?? {};
+      final status = approval['status']?.toString().toLowerCase().trim() ?? '';
+      if (status != 'approved' && status != 'rejected') continue;
+
+      final approvalId = _extractApprovalIdFromCommandEvent(event) ?? '';
+      final dedupeKey = '${approvalId}_$status';
+      if (approvalId.isNotEmpty && seen.contains(dedupeKey)) continue;
+      if (approvalId.isNotEmpty) seen.add(dedupeKey);
+
+      final command = event['command'] as Map<String, dynamic>? ?? {};
+      final risk = event['risk'] as Map<String, dynamic>? ?? {};
+      final commandRaw = _truncateForLog(
+          command['raw']?.toString() ?? '(unknown)',
+          maxLength: 88);
+      final riskLevel = risk['level']?.toString() ?? 'unknown';
+      final resolvedBy = approval['approved_by']?.toString().trim();
+      final byLabel = (resolvedBy != null && resolvedBy.isNotEmpty)
+          ? resolvedBy
+          : (event['metadata'] as Map<String, dynamic>? ?? {})['resolved_by']
+                  ?.toString()
+                  .trim() ??
+              '-';
+      final timeLabel = _timestampLabelFromMap(event, preferredKeys: const [
+        'resolved_at',
+        'resolvedAt',
+        'timestamp',
+        'created_at',
+        'createdAt'
+      ]);
+
+      entries.add({
+        'status': status,
+        'title': status == 'approved' ? '허용됨' : '거부됨',
+        'command': commandRaw,
+        'riskLevel': riskLevel,
+        'approvalId': approvalId,
+        'resolvedBy': byLabel,
+        'timeLabel': timeLabel,
+      });
+      if (entries.length >= limit) break;
+    }
+
+    return entries;
+  }
+
   String _describeDecisionPayload(Map<String, dynamic> responsePayload) {
     const candidateKeys = ['decision', 'action', 'status', 'choice', 'result'];
     for (final key in candidateKeys) {
@@ -4533,48 +4712,152 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final requestedBy = _approvalRequestedBy(approval);
     final cwd = _approvalWorkingDirectory(approval);
     final isHighRisk = riskLevel == 'high' || riskLevel == 'critical';
+    final reasons = List<String>.from(
+        (policy['reasons'] as List? ?? []).map((e) => e.toString()));
+    final actionLabel = action == 'approve' ? '허용' : '거부';
 
-    if (action == 'approve' && isHighRisk && mounted) {
-      final confirmed = await showDialog<bool>(
-            context: context,
-            builder: (dialogContext) => AlertDialog(
-              title: const Text('고위험 명령 승인 확인'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('risk: $riskLevel'),
-                  Text('type: $requestType'),
-                  Text('requested by: $requestedBy'),
-                  if (cwd.isNotEmpty) Text('cwd: $cwd'),
-                  const SizedBox(height: 8),
-                  SelectableText(
-                    _truncateForLog(commandRaw, maxLength: 240),
-                    style: const TextStyle(fontFamily: 'monospace'),
+    if (!mounted) return;
+    final confirmed = await showModalBottomSheet<bool>(
+          context: context,
+          isScrollControlled: true,
+          showDragHandle: true,
+          builder: (sheetContext) {
+            final scheme = Theme.of(sheetContext).colorScheme;
+            final accentColor = action == 'approve'
+                ? scheme.primary
+                : Theme.of(sheetContext).colorScheme.error;
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '$actionLabel 하시겠어요?',
+                        style: Theme.of(sheetContext)
+                            .textTheme
+                            .titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w800),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        '승인 대상 명령을 확인한 뒤 결정해 주세요.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _approvalMetaChip(
+                            label: 'Risk',
+                            value: riskLevel,
+                            valueColor: _riskColor(riskLevel),
+                          ),
+                          _approvalMetaChip(label: 'Type', value: requestType),
+                          _approvalMetaChip(label: 'By', value: requestedBy),
+                          if (cwd.isNotEmpty)
+                            _approvalMetaChip(label: 'CWD', value: cwd),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: scheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: scheme.outlineVariant),
+                        ),
+                        child: SelectableText(
+                          _truncateForLog(commandRaw, maxLength: 480),
+                          style: TextStyle(
+                            fontSize: 13,
+                            height: 1.4,
+                            fontFamily: 'monospace',
+                            color: scheme.onSurface,
+                          ),
+                        ),
+                      ),
+                      if (reasons.isNotEmpty) ...[
+                        const SizedBox(height: 10),
+                        ...reasons.map((reason) => Padding(
+                              padding: const EdgeInsets.only(bottom: 4),
+                              child: Text(
+                                '• $reason',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ),
+                            )),
+                      ],
+                      if (action == 'approve' && isHighRisk) ...[
+                        const SizedBox(height: 10),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Theme.of(sheetContext)
+                                .colorScheme
+                                .errorContainer,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            '고위험 명령입니다. 신뢰 가능한 요청인지 다시 확인하세요.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: Theme.of(sheetContext)
+                                  .colorScheme
+                                  .onErrorContainer,
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () =>
+                                  Navigator.of(sheetContext).pop(false),
+                              child: const Text('취소'),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: FilledButton(
+                              style: FilledButton.styleFrom(
+                                backgroundColor: accentColor,
+                              ),
+                              onPressed: () =>
+                                  Navigator.of(sheetContext).pop(true),
+                              child: Text(actionLabel),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(false),
-                  child: const Text('취소'),
-                ),
-                FilledButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(true),
-                  child: const Text('그래도 승인'),
-                ),
-              ],
-            ),
-          ) ??
-          false;
-      if (!confirmed) {
-        setState(() {
-          _messages.add(MessageItem('🛑 고위험 승인 취소: $approvalId',
-              type: MessageType.system));
-        });
-        _scrollToBottom();
-        return;
-      }
+            );
+          },
+        ) ??
+        false;
+
+    if (!confirmed) {
+      setState(() {
+        _messages.add(MessageItem('🕒 승인 결정을 취소했어요: $approvalId',
+            type: MessageType.system));
+      });
+      _scrollToBottom();
+      return;
     }
 
     await _resolveCommandApproval(approvalId, action);
@@ -4819,6 +5102,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Future<void> _resolveCommandApproval(String approvalId, String action) async {
     if (!_isConnected || _sessionId == null) return;
     if (_connectionType != ConnectionType.relay) return;
+    final normalizedAction = action == 'deny' ? 'reject' : action;
 
     Map<String, dynamic>? approvalSnapshot;
     for (final approval in _pendingCommandApprovals) {
@@ -4830,6 +5114,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final commandRaw = approvalSnapshot != null
         ? _truncateForLog(_approvalCommandRaw(approvalSnapshot), maxLength: 54)
         : '';
+    final needsAssistantResponse = approvalSnapshot != null
+        ? _approvalNeedsAssistantResponse(approvalSnapshot)
+        : false;
 
     try {
       final response = await http.post(
@@ -4838,7 +5125,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         body: jsonEncode({
           'sessionId': _sessionId,
           'approvalId': approvalId,
-          'action': action,
+          'action': normalizedAction,
           'resolvedBy': _deviceId,
           'reason': 'resolved via mobile app',
         }),
@@ -4850,14 +5137,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (!mounted) return;
       if (response.statusCode == 200 && body['success'] == true) {
         final status =
-            (body['data'] as Map<String, dynamic>? ?? {})['status'] ?? action;
+            (body['data'] as Map<String, dynamic>? ?? {})['status'] ??
+                normalizedAction;
         setState(() {
+          if (normalizedAction == 'approve' && needsAssistantResponse) {
+            _isWaitingForResponse = true;
+          } else if (normalizedAction != 'approve') {
+            _isWaitingForResponse = false;
+          }
           _messages.add(MessageItem(
-              '✅ Approval 응답: $approvalId → $status${commandRaw.isNotEmpty ? ' · $commandRaw' : ''}',
+              normalizedAction == 'approve' && needsAssistantResponse
+                  ? '✅ Approval 응답: $approvalId → $status · 응답 대기 유지${commandRaw.isNotEmpty ? ' · $commandRaw' : ''}'
+                  : '✅ Approval 응답: $approvalId → $status${commandRaw.isNotEmpty ? ' · $commandRaw' : ''}',
               type: MessageType.system));
         });
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Approval $action 완료')),
+          SnackBar(content: Text('Approval $normalizedAction 완료')),
         );
         _scrollToBottom();
         await _loadCommandApprovals(silent: true);
@@ -4865,7 +5160,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       } else {
         setState(() {
           _messages.add(MessageItem(
-              '❌ Approval 처리 실패($action): ${body['error'] ?? 'HTTP ${response.statusCode}'}',
+              '❌ Approval 처리 실패($normalizedAction): ${body['error'] ?? 'HTTP ${response.statusCode}'}',
               type: MessageType.system));
         });
         _scrollToBottom();
@@ -6040,6 +6335,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   Widget _buildConnectionFirstScaffold() {
     final history = AppSettings().connectionHistory;
+    final isBusy = _isReconnecting || _isConnectionActionInProgress;
+    final actionLabel = _connectionActionLabel ??
+        (_connectionType == ConnectionType.local
+            ? '로컬 서버 연결 요청 중...'
+            : '릴레이 세션 연결 요청 중...');
     return Scaffold(
       appBar: AppBar(
         title: const Text('연결'),
@@ -6104,7 +6404,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     ),
                   ],
                   selected: {_connectionType},
-                  onSelectionChanged: _isReconnecting
+                  onSelectionChanged: isBusy
                       ? null
                       : (selection) {
                           setState(() {
@@ -6126,8 +6426,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             hintText: '192.168.0.10',
                             prefixIcon: Icon(Icons.lan_outlined),
                           ),
-                          enabled: !_isReconnecting,
-                          onSubmitted: (_) => _connect(),
+                          enabled: !isBusy,
+                          onSubmitted: (_) => unawaited(_connect()),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -6140,8 +6440,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             hintText: '8766',
                           ),
                           keyboardType: TextInputType.number,
-                          enabled: !_isReconnecting,
-                          onSubmitted: (_) => _connect(),
+                          enabled: !isBusy,
+                          onSubmitted: (_) => unawaited(_connect()),
                         ),
                       ),
                     ],
@@ -6156,24 +6456,54 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       hintText: 'ABC123',
                       prefixIcon: Icon(Icons.cloud_outlined),
                     ),
-                    enabled: !_isReconnecting,
-                    onSubmitted: (_) => _connect(),
+                    enabled: !isBusy,
+                    onSubmitted: (_) => unawaited(_connect()),
                   ),
                 const SizedBox(height: 14),
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
-                    onPressed: _isReconnecting ? null : _connect,
-                    icon: _isReconnecting
+                    onPressed: isBusy
+                        ? null
+                        : () {
+                            unawaited(_connect());
+                          },
+                    icon: isBusy
                         ? const SizedBox(
                             width: 16,
                             height: 16,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.link),
-                    label: Text(_isReconnecting ? '연결 시도 중...' : '연결하기'),
+                    label: Text(isBusy ? '처리 중...' : '연결하기'),
                   ),
                 ),
+                if (_isConnectionActionInProgress) ...[
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          actionLabel,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
                 if (_isReconnecting) ...[
                   const SizedBox(height: 8),
                   SizedBox(
@@ -6222,7 +6552,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     title: Text(item.displayText),
                     subtitle: Text(item.relativeTime),
                     trailing: const Icon(Icons.chevron_right),
-                    onTap: () => _connectFromHistory(item),
+                    onTap: isBusy ? null : () => _connectFromHistory(item),
                   );
                 }).toList(),
               ),
@@ -6255,7 +6585,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       case HomeTab.approvals:
         return '모바일 승인 요청과 대기 중인 액션을 한곳에서 처리합니다.';
       case HomeTab.sessions:
-        return '연결 상태, 최근 세션, 대화 히스토리를 확인합니다.';
+        return '연결 상태와 최근 연결 정보를 확인합니다.';
       case HomeTab.settings:
         return '앱 환경설정과 기본 동작을 정리합니다.';
     }
@@ -6272,7 +6602,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
     if (tab == HomeTab.sessions) {
       unawaited(_loadSessionInfo());
-      unawaited(_loadChatHistory());
     }
   }
 
@@ -6282,6 +6611,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       isRelayMode: _connectionType == ConnectionType.relay,
       pendingCodexServerRequests: _pendingCodexServerRequests,
       pendingCommandApprovals: _pendingCommandApprovals,
+      processedCommandApprovals: _buildResolvedApprovalHistoryEntries(),
       submittingCodexRequestIds: _submittingCodexRequestIds,
       subtitle: _homeTabSubtitle(HomeTab.approvals),
       onOpenChat: () {
@@ -6300,7 +6630,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       approvalRequestTypeLabel: _approvalRequestTypeLabel,
       approvalCommandRaw: _approvalCommandRaw,
       approvalRequestedBy: _approvalRequestedBy,
-      onResolveCommandApproval: _resolveCommandApproval,
+      onResolveCommandApproval: (approval, action) {
+        unawaited(_confirmAndResolveApproval(approval, action));
+      },
       onMarkRelayApprovalLater: _markRelayApprovalLater,
       truncateForLog: _truncateForLog,
     );
@@ -6313,19 +6645,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       sessionId: _sessionId,
       currentCodexSessionId: _currentCodexSessionId,
       connectionHistory: AppSettings().connectionHistory,
-      availableSessions: _availableSessions,
-      chatHistory: _chatHistory,
       subtitle: _homeTabSubtitle(HomeTab.sessions),
       onRefresh: () {
         unawaited(_loadSessionInfo());
-        unawaited(_loadChatHistory());
       },
       onDisconnect: _disconnect,
       onOpenChat: () {
         unawaited(_selectHomeTab(HomeTab.chat));
       },
       onConnectFromHistory: _connectFromHistory,
-      onLoadChatHistory: _loadChatHistory,
     );
   }
 
@@ -6585,7 +6913,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                 TextInputAction.next,
                                             onSubmitted: (value) {
                                               if (!_isConnected) {
-                                                _connect();
+                                                unawaited(_connect());
                                               }
                                             },
                                             onChanged: (value) {
@@ -6614,7 +6942,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                 TextInputAction.done,
                                             onSubmitted: (value) {
                                               if (!_isConnected) {
-                                                _connect();
+                                                unawaited(_connect());
                                               }
                                             },
                                             onChanged: (value) {
@@ -6689,7 +7017,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                       textInputAction: TextInputAction.done,
                                       onSubmitted: (value) {
                                         if (!_isConnected) {
-                                          _connect();
+                                          unawaited(_connect());
                                         }
                                       },
                                     ),
@@ -7140,10 +7468,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                     children: [
                                       Expanded(
                                         child: FilledButton.icon(
-                                          onPressed:
-                                              _isConnected || _isReconnecting
-                                                  ? null
-                                                  : _connect,
+                                          onPressed: _isConnected ||
+                                                  _isReconnecting ||
+                                                  _isConnectionActionInProgress
+                                              ? null
+                                              : () {
+                                                  unawaited(_connect());
+                                                },
                                           icon: Icon(
                                             _connectionType ==
                                                     ConnectionType.local

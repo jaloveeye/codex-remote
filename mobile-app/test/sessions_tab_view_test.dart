@@ -7,8 +7,6 @@ void main() {
   Widget buildSessionsTab({
     required bool isConnected,
     required List<ConnectionHistoryItem> connectionHistory,
-    required List<String> availableSessions,
-    required List<Map<String, dynamic>> chatHistory,
     ConnectionType connectionType = ConnectionType.relay,
     String? sessionId,
     String? currentCodexSessionId,
@@ -21,14 +19,11 @@ void main() {
           sessionId: sessionId,
           currentCodexSessionId: currentCodexSessionId,
           connectionHistory: connectionHistory,
-          availableSessions: availableSessions,
-          chatHistory: chatHistory,
-          subtitle: '연결 상태, 최근 세션, 대화 히스토리를 확인합니다.',
+          subtitle: '연결 상태와 최근 연결 정보를 확인합니다.',
           onRefresh: () {},
           onDisconnect: () {},
           onOpenChat: () {},
           onConnectFromHistory: (_) {},
-          onLoadChatHistory: ({String? sessionId}) {},
         ),
       ),
     );
@@ -40,8 +35,6 @@ void main() {
         buildSessionsTab(
           isConnected: false,
           connectionHistory: const [],
-          availableSessions: const [],
-          chatHistory: const [],
         ),
       );
       await tester.pumpAndSettle();
@@ -70,8 +63,6 @@ void main() {
               timestamp: now.subtract(const Duration(hours: 1)),
             ),
           ],
-          availableSessions: const [],
-          chatHistory: const [],
         ),
       );
       await tester.pumpAndSettle();
@@ -81,27 +72,16 @@ void main() {
       expect(find.text('relay-session-1'), findsOneWidget);
     });
 
-    testWidgets('세션 히스토리를 표시한다', (tester) async {
+    testWidgets('세션 히스토리 섹션을 표시하지 않는다', (tester) async {
       await tester.pumpWidget(
         buildSessionsTab(
           isConnected: true,
           connectionHistory: const [],
-          availableSessions: const ['session-a', 'session-b'],
-          chatHistory: const [
-            {
-              'userMessage': 'show me latest logs',
-              'assistantResponse': 'Here are the latest logs summary.',
-            },
-          ],
         ),
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('세션 히스토리'), findsOneWidget);
-      expect(find.text('session-a'), findsOneWidget);
-      expect(find.text('session-b'), findsOneWidget);
-      expect(find.text('show me latest logs'), findsOneWidget);
-      expect(find.text('Here are the latest logs summary.'), findsOneWidget);
+      expect(find.text('세션 히스토리'), findsNothing);
       expect(find.text('사용 가능한 세션이 없습니다'), findsNothing);
     });
   });
