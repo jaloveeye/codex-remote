@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -530,6 +532,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool _loadingCommandEvents = false;
   final Set<String> _submittingCodexRequestIds = <String>{};
   DateTime? _lastCommandMetaRefreshAt;
+  final FlutterLocalNotificationsPlugin _localNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+  bool _isNetworkReachable = true;
+  bool _isAppForeground = true;
+  int _notificationSequence = 1000;
+  static const AndroidNotificationChannel _approvalNotificationChannel =
+      AndroidNotificationChannel(
+    'approval_requests',
+    '승인 요청',
+    description: 'Codex/Relay 승인 요청 알림',
+    importance: Importance.high,
+  );
 
   /// 같은 세션 재연결 시 메인 목록에 히스토리 반영용 (get_chat_history 응답 시 사용)
   bool _loadingSessionHistoryForDisplay = false;
@@ -3043,6 +3058,153 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _scrollController.addListener(_updateScrollButtonVisibility);
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _updateScrollButtonVisibility());
+    unawaited(_initializeNotifications());
+    unawaited(_initializeConnectivityHandling());
+  }
+
+  Future<void> _initializeNotifications() async {
+    try {
+      const androidInitializationSettings =
+          AndroidInitializationSettings('@mipmap/ic_launcher');
+      const darwinInitializationSettings = DarwinInitializationSettings(
+        requestAlertPermission: false,
+        requestBadgePermission: false,
+        requestSoundPermission: false,
+      );
+      const initializationSettings = InitializationSettings(
+        android: androidInitializationSettings,
+        iOS: darwinInitializationSettings,
+        macOS: darwinInitializationSettings,
+      );
+
+      await _localNotificationsPlugin.initialize(
+        initializationSettings,
+        onDidReceiveNotificationResponse: (_) {
+          if (!mounted) return;
+          unawaited(_selectHomeTab(HomeTab.approvals));
+        },
+      );
+
+      final androidPlugin = _localNotificationsPlugin
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
+      await androidPlugin
+          ?.createNotificationChannel(_approvalNotificationChannel);
+      await androidPlugin?.requestNotificationsPermission();
+
+      final iosPlugin = _localNotificationsPlugin
+          .resolvePlatformSpecificImplementation<
+              IOSFlutterLocalNotificationsPlugin>();
+      await iosPlugin?.requestPermissions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+      final macosPlugin = _localNotificationsPlugin
+          .resolvePlatformSpecificImplementation<
+              MacOSFlutterLocalNotificationsPlugin>();
+      await macosPlugin?.requestPermissions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+    } on MissingPluginException {
+      // widget test/web 환경에서는 플러그인이 없을 수 있음
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _messages.add(
+            MessageItem('⚠️ 알림 초기화 실패: $e', type: MessageType.system));
+      });
+    }
+  }
+
+  Future<void> _initializeConnectivityHandling() async {
+    try {
+      final connectivity = Connectivity();
+      final current = await connectivity.checkConnectivity();
+      _handleConnectivityChanged(current, emitSystemMessage: false);
+      _connectivitySubscription =
+          connectivity.onConnectivityChanged.listen(_handleConnectivityChanged);
+    } on MissingPluginException {
+      // widget test/web 환경에서는 플러그인이 없을 수 있음
+    }
+  }
+
+  void _handleConnectivityChanged(List<ConnectivityResult> results,
+      {bool emitSystemMessage = true}) {
+    final nextReachable =
+        results.any((result) => result != ConnectivityResult.none);
+    final changed = nextReachable != _isNetworkReachable;
+    _isNetworkReachable = nextReachable;
+
+    if (!changed) return;
+    if (mounted && emitSystemMessage) {
+      setState(() {
+        _messages.add(MessageItem(
+            nextReachable
+                ? '📶 네트워크가 복구되었습니다. 승인 목록을 다시 확인합니다.'
+                : '📡 네트워크 연결이 끊겼습니다. 연결 복구 시 자동 갱신됩니다.',
+            type: MessageType.system));
+      });
+    }
+
+    if (!emitSystemMessage) return;
+    if (nextReachable && _connectionType == ConnectionType.relay && _isConnected) {
+      unawaited(_loadCommandApprovals(silent: true));
+      unawaited(_loadCommandEvents(silent: true));
+    }
+  }
+
+  Future<void> _maybeNotifyApprovalArrival({
+    int newRelayApprovals = 0,
+    int newCodexRequests = 0,
+  }) async {
+    if (newRelayApprovals <= 0 && newCodexRequests <= 0) return;
+    if (_isAppForeground && _selectedHomeTab == HomeTab.approvals) return;
+
+    final pieces = <String>[];
+    if (newCodexRequests > 0) {
+      pieces.add('Codex $newCodexRequests건');
+    }
+    if (newRelayApprovals > 0) {
+      pieces.add('Relay $newRelayApprovals건');
+    }
+
+    try {
+      _notificationSequence++;
+      const notificationDetails = NotificationDetails(
+        android: AndroidNotificationDetails(
+          'approval_requests',
+          '승인 요청',
+          channelDescription: 'Codex/Relay 승인 요청 알림',
+          importance: Importance.high,
+          priority: Priority.high,
+        ),
+        iOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+        ),
+        macOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+        ),
+      );
+
+      await _localNotificationsPlugin.show(
+        _notificationSequence,
+        '새 승인 요청이 도착했어요',
+        pieces.join(' · '),
+        notificationDetails,
+        payload: 'approvals',
+      );
+    } on MissingPluginException {
+      // 미지원 플랫폼은 무시
+    } catch (_) {
+      // 알림 실패는 치명적이지 않으므로 무시
+    }
   }
 
   void _updateScrollButtonVisibility() {
@@ -3210,6 +3372,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
+      _isAppForeground = true;
       // 앱이 다시 활성화되었을 때 연결 상태 확인 및 UI 갱신
       if (mounted) {
         // 연결 상태 확인
@@ -3223,8 +3386,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           }
         });
       }
+      if (_connectionType == ConnectionType.relay && _isConnected) {
+        unawaited(_loadCommandApprovals(silent: true));
+        unawaited(_loadCommandEvents(silent: true));
+      }
     } else if (state == AppLifecycleState.paused) {
-      // 앱이 백그라운드로 갔을 때는 특별한 처리가 필요 없음
+      _isAppForeground = false;
+    } else if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      _isAppForeground = false;
     }
   }
 
@@ -3311,6 +3482,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Future<void> _loadCommandApprovals({bool silent = false}) async {
     if (!_isConnected || _sessionId == null) return;
     if (_connectionType != ConnectionType.relay) return;
+    if (!_isNetworkReachable) {
+      if (!silent && mounted) {
+        setState(() {
+          _messages.add(MessageItem('📡 오프라인 상태에서는 승인 목록을 불러올 수 없어요.',
+              type: MessageType.system));
+        });
+        _scrollToBottom();
+      }
+      return;
+    }
     if (_loadingCommandApprovals) return;
 
     if (mounted) {
@@ -3332,6 +3513,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         final approvals = List<Map<String, dynamic>>.from(
             (data['approvals'] as List? ?? [])
                 .map((e) => Map<String, dynamic>.from(e as Map)));
+        var newRelayApprovals = 0;
 
         setState(() {
           _pendingCommandApprovals = approvals;
@@ -3343,6 +3525,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             }
 
             _seenCommandApprovalIds.add(approvalId);
+            newRelayApprovals++;
             final policy = approval['policy'] as Map<String, dynamic>? ?? {};
             final riskLevel = policy['risk_level']?.toString() ?? 'unknown';
             final commandRaw = _truncateForLog(_approvalCommandRaw(approval));
@@ -3364,6 +3547,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           });
           _scrollToBottom();
         }
+        unawaited(_maybeNotifyApprovalArrival(
+          newRelayApprovals: newRelayApprovals,
+        ));
       } else {
         setState(() => _loadingCommandApprovals = false);
         if (!silent) {
@@ -4117,6 +4303,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Future<void> _loadCommandEvents({int limit = 20, bool silent = false}) async {
     if (!_isConnected || _sessionId == null) return;
     if (_connectionType != ConnectionType.relay) return;
+    if (!_isNetworkReachable) {
+      if (!silent && mounted) {
+        setState(() {
+          _messages.add(MessageItem('📡 오프라인 상태에서는 이벤트 목록을 불러올 수 없어요.',
+              type: MessageType.system));
+        });
+        _scrollToBottom();
+      }
+      return;
+    }
     if (_loadingCommandEvents) return;
 
     if (mounted) {
@@ -4478,11 +4674,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     final requestId = payload['requestId']?.toString() ?? '';
     if (requestId.isEmpty) return;
+    final isNewRequest = _seenCodexRequestIds.add(requestId);
 
     if (!mounted) return;
     setState(() {
       _upsertPendingCodexServerRequest(payload);
-      if (_seenCodexRequestIds.add(requestId)) {
+      if (isNewRequest) {
         final summary =
             _truncateForLog(_codexRequestSummary(payload), maxLength: 56);
         _messages.add(MessageItem(
@@ -4493,6 +4690,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     });
     _scrollToBottom();
     HapticFeedback.heavyImpact();
+    if (isNewRequest) {
+      unawaited(_maybeNotifyApprovalArrival(newCodexRequests: 1));
+    }
     _scheduleAutoDecisionForCodexRequest(payload);
     unawaited(_showCodexServerRequestDialog(payload));
   }
@@ -5026,6 +5226,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     AppSettings().removeListener(_onAppSettingsChanged);
     _capabilitiesLoadTimer?.cancel();
+    _connectivitySubscription?.cancel();
     _stopPolling();
     _localWebSocket?.sink.close();
     _commandController.dispose();

@@ -13,6 +13,8 @@ dependencies:
   web_socket_channel: ^3.0.0
   cupertino_icons: ^1.0.6
   shared_preferences: ^2.2.2
+  connectivity_plus: ^6.1.5
+  flutter_local_notifications: ^19.5.0
 
 dev_dependencies:
   flutter_test:
