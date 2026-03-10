@@ -96,7 +96,7 @@ class ApprovalsTabView extends StatelessWidget {
             children: [
               Expanded(
                 child: HomeMetricCard(
-                  label: 'Codex requests',
+                  label: 'Codex 요청',
                   value: '${pendingCodexServerRequests.length}',
                   icon: Icons.notification_important_outlined,
                 ),
@@ -104,7 +104,7 @@ class ApprovalsTabView extends StatelessWidget {
               const SizedBox(width: 10),
               Expanded(
                 child: HomeMetricCard(
-                  label: 'Relay approvals',
+                  label: '릴레이 승인',
                   value: '${pendingCommandApprovals.length}',
                   icon: Icons.approval_outlined,
                 ),
@@ -113,7 +113,7 @@ class ApprovalsTabView extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           Text(
-            'Pending Codex actions',
+            '대기 중인 Codex 액션',
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w700,
@@ -189,8 +189,7 @@ class ApprovalsTabView extends StatelessWidget {
                           spacing: 8,
                           runSpacing: 8,
                           children: choices.map((choice) {
-                            final label =
-                                choice['label']?.toString() ?? 'Respond';
+                            final label = choice['label']?.toString() ?? '응답';
                             final style =
                                 choice['style']?.toString() ?? 'secondary';
                             final responsePayload = Map<String, dynamic>.from(
@@ -220,7 +219,7 @@ class ApprovalsTabView extends StatelessWidget {
             }),
           const SizedBox(height: 8),
           Text(
-            'Relay approvals',
+            '릴레이 승인 요청',
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w700,

@@ -54,8 +54,8 @@ void main() {
 
       expect(find.text('승인 요청을 받을 준비가 필요해요'), findsOneWidget);
       expect(find.text('채팅 화면으로 이동'), findsOneWidget);
-      expect(find.text('Codex requests'), findsNothing);
-      expect(find.text('Relay approvals'), findsNothing);
+      expect(find.text('Codex 요청'), findsNothing);
+      expect(find.text('릴레이 승인 요청'), findsNothing);
     });
 
     testWidgets('연결 상태에서 metric 카드를 표시한다', (tester) async {
@@ -75,8 +75,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(HomeMetricCard), findsNWidgets(2));
-      expect(find.text('Codex requests'), findsOneWidget);
-      expect(find.text('Relay approvals'), findsAtLeastNWidgets(1));
+      expect(find.text('Codex 요청'), findsOneWidget);
+      expect(find.text('릴레이 승인'), findsOneWidget);
       expect(find.text('2'), findsOneWidget);
       expect(find.text('1'), findsOneWidget);
     });
