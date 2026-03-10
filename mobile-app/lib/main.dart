@@ -755,6 +755,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   List<Map<String, dynamic>> _pendingCommandApprovals = [];
   List<Map<String, dynamic>> _pendingCodexServerRequests = [];
   List<Map<String, dynamic>> _recentCommandEvents = [];
+  final Map<String, Map<String, dynamic>> _resolvedApprovalEventFallbacks = {};
   final Set<String> _seenCommandApprovalIds = <String>{};
   final Set<String> _seenCodexRequestIds = <String>{};
   AutoDecisionMode _autoDecisionMode = AutoDecisionMode.off;
@@ -4474,6 +4475,130 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return isPrompt && shouldExecute;
   }
 
+  String _approvalHistoryStatusKey(String? approvalId, String status) {
+    final normalizedId = approvalId?.trim() ?? '';
+    if (normalizedId.isEmpty) return '';
+    return '${normalizedId}_${status.toLowerCase()}';
+  }
+
+  String _normalizeApprovalStatusFromEvent(Map<String, dynamic> event) {
+    final approval = event['approval'] as Map<String, dynamic>? ?? {};
+    final rawStatus = approval['status']?.toString().toLowerCase().trim() ?? '';
+    switch (rawStatus) {
+      case 'accept':
+      case 'accepted':
+      case 'approve':
+      case 'approved':
+        return 'approved';
+      case 'deny':
+      case 'denied':
+      case 'reject':
+      case 'rejected':
+        return 'rejected';
+      default:
+        return rawStatus;
+    }
+  }
+
+  String? _deriveApprovalStatusFromEvent(Map<String, dynamic> event) {
+    final approval = event['approval'] as Map<String, dynamic>? ?? {};
+    final metadata = event['metadata'] as Map<String, dynamic>? ?? {};
+    final result = event['result'] as Map<String, dynamic>? ?? {};
+
+    final normalizedStatus = _normalizeApprovalStatusFromEvent(event);
+    if (normalizedStatus == 'approved' || normalizedStatus == 'rejected') {
+      return normalizedStatus;
+    }
+
+    final approvalRequired = approval['required'] == true ||
+        _extractApprovalIdFromCommandEvent(event) != null;
+    if (!approvalRequired) return null;
+
+    final rawAction = metadata['action']?.toString().toLowerCase().trim() ?? '';
+    if (rawAction == 'approve' || rawAction == 'approved') return 'approved';
+    if (rawAction == 'reject' || rawAction == 'rejected') return 'rejected';
+
+    final resultStatus =
+        result['status']?.toString().toLowerCase().trim() ?? '';
+    switch (resultStatus) {
+      case 'success':
+      case 'error':
+      case 'timeout':
+        return 'approved';
+      case 'cancelled':
+        return 'rejected';
+      default:
+        break;
+    }
+
+    final approvedBy = approval['approved_by']?.toString().trim() ?? '';
+    if (approvedBy.isNotEmpty) return 'approved';
+
+    return null;
+  }
+
+  void _upsertResolvedApprovalEventFallback(
+    Map<String, dynamic> approval, {
+    required String status,
+  }) {
+    final approvalId = approval['approval_id']?.toString() ?? '';
+    final normalizedApprovalId = approvalId.trim();
+    if (normalizedApprovalId.isEmpty) return;
+
+    final key = _approvalHistoryStatusKey(normalizedApprovalId, status);
+    if (key.isEmpty) return;
+    final policy = approval['policy'] as Map<String, dynamic>? ?? {};
+    final reasons = List<String>.from((policy['reasons'] as List? ?? []));
+
+    final commandData = _approvalCommandData(approval);
+
+    final fallback = {
+      'event_id': 'mobile-fallback-${DateTime.now().millisecondsSinceEpoch}',
+      'session_id': _sessionId ?? '',
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+      'tool': {
+        'provider': 'codex',
+        'name': 'mobile-approval-fallback',
+      },
+      'command': {
+        'raw': commandData['command']?.toString() ??
+            commandData['raw']?.toString() ??
+            '-',
+        'cwd': commandData['cwd']?.toString(),
+      },
+      'risk': {
+        'level': policy['risk_level']?.toString() ?? 'unknown',
+        'reasons': reasons,
+      },
+      'policy': {
+        'decision': 'approval_required',
+        'rule_id': policy['rule_id']?.toString() ?? 'approval_required',
+      },
+      'approval': {
+        'required': true,
+        'status': status,
+        'approved_by': status == 'approved' ? _deviceId : null,
+        'approved_at':
+            status == 'approved' ? DateTime.now().millisecondsSinceEpoch : null,
+        'reason': 'resolved via mobile app',
+      },
+      'result': {
+        'status': status == 'approved' ? 'pending' : 'cancelled',
+        'exit_code': null,
+        'duration_ms': 0,
+        'error_message': status == 'approved' ? null : 'Rejected by approver',
+      },
+      'metadata': {
+        'approval_id': approvalId,
+        'action': status,
+        'resolved_by': _deviceId,
+        'resolved_at': DateTime.now().millisecondsSinceEpoch,
+      },
+    };
+
+    _resolvedApprovalEventFallbacks[key] = Map<String, dynamic>.from(fallback);
+  }
+
   List<Map<String, dynamic>> _buildResolvedApprovalHistoryEntries(
       {int limit = 20}) {
     final entries = <Map<String, dynamic>>[];
@@ -4481,7 +4606,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     for (final event in _recentCommandEvents) {
       final approval = event['approval'] as Map<String, dynamic>? ?? {};
-      final status = approval['status']?.toString().toLowerCase().trim() ?? '';
+      final status = _deriveApprovalStatusFromEvent(event) ?? '';
       if (status != 'approved' && status != 'rejected') continue;
 
       final approvalId = _extractApprovalIdFromCommandEvent(event) ?? '';
@@ -5063,8 +5188,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         final events = List<Map<String, dynamic>>.from(
             (data['events'] as List? ?? [])
                 .map((e) => Map<String, dynamic>.from(e as Map)));
+        final mergedEvents = _mergeCommandEvents(events);
         setState(() {
-          _recentCommandEvents = events;
+          _recentCommandEvents = mergedEvents;
+          _pruneResolvedApprovalEventFallbacks(events);
           _loadingCommandEvents = false;
         });
 
@@ -5099,6 +5226,74 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  List<Map<String, dynamic>> _mergeCommandEvents(
+      List<Map<String, dynamic>> events) {
+    final merged = <Map<String, dynamic>>[];
+    final seen = <String>{};
+
+    void addIfNew(Map<String, dynamic> event) {
+      final approvalId = _extractApprovalIdFromCommandEvent(event);
+      final status = _deriveApprovalStatusFromEvent(event) ?? '';
+      final key = _approvalHistoryStatusKey(approvalId, status);
+      if (key.isNotEmpty && seen.contains(key)) return;
+      if (key.isNotEmpty) seen.add(key);
+      merged.add(event);
+    }
+
+    for (final event in events) {
+      addIfNew(event);
+    }
+
+    for (final fallback in _resolvedApprovalEventFallbacks.values) {
+      addIfNew(Map<String, dynamic>.from(fallback));
+    }
+
+    merged.sort((a, b) {
+      final at = _parseTimestampValue(a['timestamp']) ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      final bt = _parseTimestampValue(b['timestamp']) ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      return bt.compareTo(at);
+    });
+
+    return merged;
+  }
+
+  void _pruneResolvedApprovalEventFallbacks(List<Map<String, dynamic>> events) {
+    final seen = <String>{};
+    for (final event in events) {
+      final approvalId = _extractApprovalIdFromCommandEvent(event);
+      final status = _deriveApprovalStatusFromEvent(event) ?? '';
+      final key = _approvalHistoryStatusKey(approvalId, status);
+      if (key.isNotEmpty) {
+        seen.add(key);
+      }
+    }
+    _resolvedApprovalEventFallbacks.removeWhere(
+      (key, _) => seen.contains(key),
+    );
+  }
+
+  Future<void> _waitForApprovalResolution(
+    String approvalId, {
+    required String expectedStatus,
+    int attempts = 5,
+    Duration interval = const Duration(milliseconds: 700),
+  }) async {
+    var remaining = attempts;
+    while (remaining > 0 && mounted) {
+      remaining -= 1;
+      await Future<void>.delayed(interval);
+      await _loadCommandEvents(silent: true);
+      final matched = _recentCommandEvents.any((event) {
+        final approvalIdFromEvent = _extractApprovalIdFromCommandEvent(event);
+        if (approvalIdFromEvent != approvalId) return false;
+        return _deriveApprovalStatusFromEvent(event) == expectedStatus;
+      });
+      if (matched) return;
+    }
+  }
+
   Future<void> _resolveCommandApproval(String approvalId, String action) async {
     if (!_isConnected || _sessionId == null) return;
     if (_connectionType != ConnectionType.relay) return;
@@ -5117,6 +5312,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final needsAssistantResponse = approvalSnapshot != null
         ? _approvalNeedsAssistantResponse(approvalSnapshot)
         : false;
+    final resolvedHistoryStatus = normalizedAction == 'approve'
+        ? 'approved'
+        : normalizedAction == 'reject'
+            ? 'rejected'
+            : normalizedAction;
 
     try {
       final response = await http.post(
@@ -5139,6 +5339,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         final status =
             (body['data'] as Map<String, dynamic>? ?? {})['status'] ??
                 normalizedAction;
+        final normalizedStatus = status is String
+            ? _normalizeApprovalStatusFromEvent({
+                'approval': {'status': status},
+              })
+            : resolvedHistoryStatus;
+        if (approvalSnapshot != null) {
+          _upsertResolvedApprovalEventFallback(
+            approvalSnapshot,
+            status: normalizedStatus,
+          );
+          setState(() {
+            _recentCommandEvents = _mergeCommandEvents(_recentCommandEvents);
+          });
+        }
         setState(() {
           if (normalizedAction == 'approve' && needsAssistantResponse) {
             _isWaitingForResponse = true;
@@ -5157,6 +5371,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _scrollToBottom();
         await _loadCommandApprovals(silent: true);
         await _loadCommandEvents(silent: true);
+        if (approvalSnapshot != null) {
+          unawaited(_waitForApprovalResolution(approvalId,
+              expectedStatus: normalizedStatus));
+        }
       } else {
         setState(() {
           _messages.add(MessageItem(
@@ -9669,8 +9887,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                 command['raw']?.toString() ??
                                                     '(unknown)';
                                             final approvalStatus =
-                                                approval['status']
-                                                        ?.toString() ??
+                                                _deriveApprovalStatusFromEvent(
+                                                      event,
+                                                    ) ??
+                                                    approval['status']
+                                                        ?.toString()
+                                                        .toLowerCase()
+                                                        .trim() ??
                                                     'not_required';
                                             final riskLevel =
                                                 risk['level']?.toString() ??
