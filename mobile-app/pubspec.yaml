@@ -1,7 +1,7 @@
 name: codex_remote
 description: Control Codex from your mobile device through the VS Code extension and relay server.
 publish_to: 'none'
-version: 0.1.5+5
+version: 0.1.6+6
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
