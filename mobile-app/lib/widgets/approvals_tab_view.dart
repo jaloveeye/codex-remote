@@ -9,6 +9,7 @@ class ApprovalsTabView extends StatelessWidget {
     required this.isRelayMode,
     required this.pendingCodexServerRequests,
     required this.pendingCommandApprovals,
+    required this.processedCommandApprovals,
     required this.submittingCodexRequestIds,
     required this.subtitle,
     required this.onOpenChat,
@@ -31,6 +32,7 @@ class ApprovalsTabView extends StatelessWidget {
   final bool isRelayMode;
   final List<Map<String, dynamic>> pendingCodexServerRequests;
   final List<Map<String, dynamic>> pendingCommandApprovals;
+  final List<Map<String, dynamic>> processedCommandApprovals;
   final Set<String> submittingCodexRequestIds;
   final String subtitle;
   final VoidCallback onOpenChat;
@@ -46,7 +48,7 @@ class ApprovalsTabView extends StatelessWidget {
   final String Function(Map<String, dynamic>) approvalRequestTypeLabel;
   final String Function(Map<String, dynamic>) approvalCommandRaw;
   final String Function(Map<String, dynamic>) approvalRequestedBy;
-  final void Function(String approvalId, String action)
+  final void Function(Map<String, dynamic> approval, String action)
       onResolveCommandApproval;
   final void Function(Map<String, dynamic>) onMarkRelayApprovalLater;
   final String Function(String value, {int maxLength}) truncateForLog;
@@ -272,7 +274,7 @@ class ApprovalsTabView extends StatelessWidget {
                         children: [
                           FilledButton(
                             onPressed: () =>
-                                onResolveCommandApproval(approvalId, 'approve'),
+                                onResolveCommandApproval(approval, 'approve'),
                             child: const Text('허용'),
                           ),
                           OutlinedButton(
@@ -281,10 +283,90 @@ class ApprovalsTabView extends StatelessWidget {
                           ),
                           OutlinedButton(
                             onPressed: () =>
-                                onResolveCommandApproval(approvalId, 'deny'),
+                                onResolveCommandApproval(approval, 'reject'),
                             child: const Text('거부'),
                           ),
                         ],
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+          const SizedBox(height: 8),
+          Text(
+            '처리 히스토리',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: Theme.of(context).colorScheme.onSurface,
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (processedCommandApprovals.isEmpty)
+            const HomeEmptyStateCard(
+              icon: Icons.history_toggle_off_outlined,
+              title: '처리된 승인 기록이 아직 없어요',
+              message: '승인/거부한 요청은 여기에서 최근 기록으로 확인할 수 있어요.',
+            )
+          else
+            ...processedCommandApprovals.take(12).map((item) {
+              final status = item['status']?.toString() ?? '';
+              final title = item['title']?.toString() ?? '-';
+              final command = item['command']?.toString() ?? '(unknown)';
+              final riskLevel = item['riskLevel']?.toString() ?? 'unknown';
+              final approvalId = item['approvalId']?.toString() ?? '-';
+              final resolvedBy = item['resolvedBy']?.toString() ?? '-';
+              final timeLabel = item['timeLabel']?.toString() ?? '-';
+              final isApproved = status == 'approved';
+              final iconColor = isApproved
+                  ? Theme.of(context).colorScheme.primary
+                  : Theme.of(context).colorScheme.error;
+
+              return Card(
+                margin: const EdgeInsets.only(bottom: 10),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        isApproved ? Icons.check_circle_outline : Icons.block,
+                        size: 20,
+                        color: iconColor,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '$title · risk: $riskLevel',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              command,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Theme.of(context).colorScheme.onSurface,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '$timeLabel · by $resolvedBy · ID: $approvalId',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),

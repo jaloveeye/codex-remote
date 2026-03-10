@@ -9,6 +9,7 @@ void main() {
     required bool isRelayMode,
     List<Map<String, dynamic>> pendingCodexServerRequests = const [],
     List<Map<String, dynamic>> pendingCommandApprovals = const [],
+    List<Map<String, dynamic>> processedCommandApprovals = const [],
   }) {
     return MaterialApp(
       home: Scaffold(
@@ -17,6 +18,7 @@ void main() {
           isRelayMode: isRelayMode,
           pendingCodexServerRequests: pendingCodexServerRequests,
           pendingCommandApprovals: pendingCommandApprovals,
+          processedCommandApprovals: processedCommandApprovals,
           submittingCodexRequestIds: const <String>{},
           subtitle: '모바일 승인 요청과 대기 중인 액션을 한곳에서 처리합니다.',
           onOpenChat: () {},
@@ -129,6 +131,32 @@ void main() {
       expect(find.text('허용'), findsOneWidget);
       expect(find.text('나중에'), findsOneWidget);
       expect(find.text('거부'), findsOneWidget);
+    });
+
+    testWidgets('처리 히스토리 카드를 노출한다', (tester) async {
+      await tester.pumpWidget(
+        buildApprovalsTab(
+          isConnected: true,
+          isRelayMode: true,
+          processedCommandApprovals: const [
+            {
+              'status': 'approved',
+              'title': '허용됨',
+              'command': 'npm run verify',
+              'riskLevel': 'high',
+              'approvalId': 'ap-1',
+              'resolvedBy': 'mobile',
+              'timeLabel': '13:20:10',
+            }
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('처리 히스토리'), findsOneWidget);
+      expect(find.text('허용됨 · risk: high'), findsOneWidget);
+      expect(find.text('npm run verify'), findsOneWidget);
+      expect(find.text('13:20:10 · by mobile · ID: ap-1'), findsOneWidget);
     });
   });
 }
