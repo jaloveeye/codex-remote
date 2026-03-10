@@ -370,10 +370,15 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
+  static const String _onboardingDoneKey = 'mobile_onboarding_done_v1';
+  bool _isBootstrapping = true;
+  bool _showOnboarding = false;
+
   @override
   void initState() {
     super.initState();
     AppSettings().addListener(_onSettingsChanged);
+    unawaited(_prepareLaunchFlow());
   }
 
   @override
@@ -386,6 +391,27 @@ class _MyAppState extends State<MyApp> {
     setState(() {});
   }
 
+  Future<void> _prepareLaunchFlow() async {
+    await Future<void>.delayed(const Duration(milliseconds: 900));
+    final prefs = await SharedPreferences.getInstance();
+    final onboardingDone = prefs.getBool(_onboardingDoneKey) ?? false;
+
+    if (!mounted) return;
+    setState(() {
+      _showOnboarding = !onboardingDone;
+      _isBootstrapping = false;
+    });
+  }
+
+  Future<void> _completeOnboarding() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_onboardingDoneKey, true);
+    if (!mounted) return;
+    setState(() {
+      _showOnboarding = false;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -393,7 +419,200 @@ class _MyAppState extends State<MyApp> {
       theme: lightTheme,
       darkTheme: darkTheme,
       themeMode: AppSettings().themeModeValue,
-      home: const HomePage(),
+      home: _isBootstrapping
+          ? const SplashLaunchPage()
+          : (_showOnboarding
+              ? OnboardingPage(onContinue: _completeOnboarding)
+              : const HomePage()),
+    );
+  }
+}
+
+class SplashLaunchPage extends StatelessWidget {
+  const SplashLaunchPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 88,
+              height: 88,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: scheme.primaryContainer,
+                borderRadius: BorderRadius.circular(26),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: Image.asset('images/app_icon.png'),
+              ),
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Codex Remote',
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+                color: scheme.onSurface,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '연결 준비 중...',
+              style: TextStyle(
+                fontSize: 13,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 18),
+            SizedBox(
+              width: 120,
+              child: LinearProgressIndicator(
+                borderRadius: BorderRadius.circular(999),
+                minHeight: 6,
+                color: scheme.primary,
+                backgroundColor: scheme.surfaceContainerHighest,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class OnboardingPage extends StatelessWidget {
+  const OnboardingPage({super.key, required this.onContinue});
+
+  final Future<void> Function() onContinue;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Codex Remote 시작하기',
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.w800,
+                  color: scheme.onSurface,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                '모바일에서 승인 요청과 세션 상태를 빠르게 확인하세요.',
+                style: TextStyle(
+                  fontSize: 14,
+                  height: 1.45,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 28),
+              _OnboardingFeatureTile(
+                icon: Icons.hub_outlined,
+                title: '빠른 연결',
+                description: '로컬/릴레이 연결을 설정하고 Codex 세션에 즉시 접속',
+              ),
+              const SizedBox(height: 12),
+              _OnboardingFeatureTile(
+                icon: Icons.gpp_good_outlined,
+                title: '모바일 승인',
+                description: '승인 요청 도착 시 앱에서 바로 확인하고 처리',
+              ),
+              const SizedBox(height: 12),
+              _OnboardingFeatureTile(
+                icon: Icons.chat_bubble_outline,
+                title: '대화 이어가기',
+                description: 'Chat 탭에서 프롬프트/응답 흐름을 간결하게 관리',
+              ),
+              const Spacer(),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () {
+                    unawaited(onContinue());
+                  },
+                  child: const Text('시작하기'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _OnboardingFeatureTile extends StatelessWidget {
+  const _OnboardingFeatureTile({
+    required this.icon,
+    required this.title,
+    required this.description,
+  });
+
+  final IconData icon;
+  final String title;
+  final String description;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withOpacity(0.65),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: scheme.surface,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, size: 18, color: scheme.onSurfaceVariant),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: scheme.onSurface,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  description,
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.4,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -628,7 +847,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool _canScrollDown = false;
 
   /// 연결 후 컴팩트 뷰 (메시지 크게 + 한줄 프롬프트만)
-  bool _isCompactView = false;
+  bool _isCompactView = true;
 
   // 필터 상태 (기본값: AI 응답 + 사용자 프롬프트만 활성화)
   final Map<MessageFilter, bool> _activeFilters = {
@@ -5459,6 +5678,258 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
+  Widget _buildChatGptLikeBody() {
+    return Column(
+      children: [
+        Expanded(
+          child: Container(
+            color: Theme.of(context).colorScheme.surface,
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
+            child: _buildMessageListWithScrollButtons(),
+          ),
+        ),
+        SafeArea(
+          top: false,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface,
+              border: Border(
+                top: BorderSide(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+              ),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _commandController,
+                    focusNode: _commandFocusNode,
+                    minLines: 1,
+                    maxLines: 4,
+                    textInputAction: TextInputAction.send,
+                    decoration: InputDecoration(
+                      hintText: _isWaitingForResponse
+                          ? '응답 생성 중...'
+                          : '메시지를 입력하세요',
+                      filled: true,
+                      fillColor:
+                          Theme.of(context).colorScheme.surfaceContainerHighest,
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 12),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(26),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                    onSubmitted: (_) {
+                      unawaited(_submitPromptFromInput(newSession: false));
+                    },
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  onPressed: _isWaitingForResponse
+                      ? null
+                      : () {
+                          unawaited(_submitPromptFromInput(newSession: false));
+                        },
+                  icon: const Icon(Icons.arrow_upward),
+                  tooltip: '보내기',
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildConnectionFirstScaffold() {
+    final history = AppSettings().connectionHistory;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('연결'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: '설정',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => const SettingsPage(),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '첫 연결을 시작해요',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: Theme.of(context).colorScheme.onSurface,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '연결이 완료되면 Chat/Approvals/Sessions/Settings를 사용할 수 있어요.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.4,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                SegmentedButton<ConnectionType>(
+                  segments: const [
+                    ButtonSegment<ConnectionType>(
+                      value: ConnectionType.local,
+                      label: Text('로컬'),
+                      icon: Icon(Icons.computer, size: 18),
+                    ),
+                    ButtonSegment<ConnectionType>(
+                      value: ConnectionType.relay,
+                      label: Text('릴레이'),
+                      icon: Icon(Icons.cloud, size: 18),
+                    ),
+                  ],
+                  selected: {_connectionType},
+                  onSelectionChanged: _isReconnecting
+                      ? null
+                      : (selection) {
+                          setState(() {
+                            _connectionType = selection.first;
+                          });
+                        },
+                ),
+                const SizedBox(height: 14),
+                if (_connectionType == ConnectionType.local)
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _localIpController,
+                          focusNode: _localIpFocusNode,
+                          textInputAction: TextInputAction.next,
+                          decoration: const InputDecoration(
+                            labelText: 'PC IP',
+                            hintText: '192.168.0.10',
+                            prefixIcon: Icon(Icons.lan_outlined),
+                          ),
+                          enabled: !_isReconnecting,
+                          onSubmitted: (_) => _connect(),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 104,
+                        child: TextField(
+                          controller: _localPortController,
+                          decoration: const InputDecoration(
+                            labelText: '포트',
+                            hintText: '8766',
+                          ),
+                          keyboardType: TextInputType.number,
+                          enabled: !_isReconnecting,
+                          onSubmitted: (_) => _connect(),
+                        ),
+                      ),
+                    ],
+                  )
+                else
+                  TextField(
+                    controller: _sessionIdController,
+                    focusNode: _sessionIdFocusNode,
+                    textCapitalization: TextCapitalization.characters,
+                    decoration: const InputDecoration(
+                      labelText: 'Session ID',
+                      hintText: 'ABC123',
+                      prefixIcon: Icon(Icons.cloud_outlined),
+                    ),
+                    enabled: !_isReconnecting,
+                    onSubmitted: (_) => _connect(),
+                  ),
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: _isReconnecting ? null : _connect,
+                    icon: _isReconnecting
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.link),
+                    label: Text(_isReconnecting ? '연결 시도 중...' : '연결하기'),
+                  ),
+                ),
+                if (_lastConnectionError != null) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    '마지막 오류: $_lastConnectionError',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (history.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text(
+              '최근 연결',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Card(
+              margin: EdgeInsets.zero,
+              child: Column(
+                children: history.map((item) {
+                  return ListTile(
+                    leading: Icon(
+                      item.type == ConnectionType.local
+                          ? Icons.computer_outlined
+                          : Icons.cloud_outlined,
+                    ),
+                    title: Text(item.displayText),
+                    subtitle: Text(item.relativeTime),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => _connectFromHistory(item),
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   String _homeTabTitle(HomeTab tab) {
     switch (tab) {
       case HomeTab.chat:
@@ -5571,6 +6042,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    if (!_isConnected) {
+      return _buildConnectionFirstScaffold();
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: Row(
@@ -5658,18 +6133,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 ),
               ),
             ),
-          // 컴팩트 뷰 전환 (연결됐을 때만)
-          if (_isConnected && _selectedHomeTab == HomeTab.chat)
-            IconButton(
-              icon: Icon(
-                _isCompactView ? Icons.fullscreen : Icons.compress,
-                size: 22,
-              ),
-              tooltip: _isCompactView ? '전체 화면으로' : '컴팩트 보기 (메시지 크게)',
-              onPressed: () {
-                setState(() => _isCompactView = !_isCompactView);
-              },
-            ),
           // 설정 버튼
           IconButton(
             icon: const Icon(Icons.settings_outlined),
@@ -5690,7 +6153,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ),
       body: _selectedHomeTab == HomeTab.chat
           ? (_isCompactView && _isConnected
-              ? _buildCompactBody()
+              ? _buildChatGptLikeBody()
               : Column(
                   children: [
                     // 최상단: 연결 상태 및 설정 카드
