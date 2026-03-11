@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
@@ -11,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models/connection_models.dart';
 import 'services/app_settings.dart';
+import 'services/app_i18n.dart';
 import 'screens/settings_page.dart';
 import 'widgets/approvals_tab_view.dart';
 import 'widgets/chat_prompt_options_bar.dart';
@@ -448,6 +450,16 @@ class _MyAppState extends State<MyApp> {
       title: 'Codex Remote',
       theme: lightTheme,
       darkTheme: darkTheme,
+      locale: AppSettings().appLocale,
+      supportedLocales: const [
+        Locale('en'),
+        Locale('ko'),
+      ],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+      ],
       themeMode: AppSettings().themeModeValue,
       home: _isBootstrapping
           ? const SplashLaunchPage()
@@ -515,7 +527,7 @@ class SplashLaunchPage extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              '연결 준비 중...',
+              AppI18n.t(context, AppTextKey.connectionReadyText),
               style: TextStyle(
                 fontSize: 13,
                 color: scheme.onSurfaceVariant,
@@ -559,7 +571,7 @@ class OnboardingPage extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Codex Remote 시작하기',
+                AppI18n.t(context, AppTextKey.onboardingTitle),
                 style: TextStyle(
                   fontSize: 28,
                   fontWeight: FontWeight.w800,
@@ -568,7 +580,7 @@ class OnboardingPage extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               Text(
-                '모바일에서 승인 요청과 세션 상태를 빠르게 확인하세요.',
+                AppI18n.t(context, AppTextKey.onboardingSubtitle),
                 style: TextStyle(
                   fontSize: 14,
                   height: 1.45,
@@ -578,20 +590,25 @@ class OnboardingPage extends StatelessWidget {
               const SizedBox(height: 28),
               _OnboardingFeatureTile(
                 icon: Icons.hub_outlined,
-                title: '빠른 연결',
-                description: '로컬/릴레이 연결을 설정하고 Codex 세션에 즉시 접속',
+                title:
+                    AppI18n.t(context, AppTextKey.onboardingFeatureConnection),
+                description: AppI18n.t(
+                    context, AppTextKey.onboardingFeatureConnectionDesc),
               ),
               const SizedBox(height: 12),
               _OnboardingFeatureTile(
                 icon: Icons.gpp_good_outlined,
-                title: '모바일 승인',
-                description: '승인 요청 도착 시 앱에서 바로 확인하고 처리',
+                title:
+                    AppI18n.t(context, AppTextKey.onboardingFeatureApprovals),
+                description: AppI18n.t(
+                    context, AppTextKey.onboardingFeatureApprovalsDesc),
               ),
               const SizedBox(height: 12),
               _OnboardingFeatureTile(
                 icon: Icons.chat_bubble_outline,
-                title: '대화 이어가기',
-                description: 'Chat 탭에서 프롬프트/응답 흐름을 간결하게 관리',
+                title: AppI18n.t(context, AppTextKey.onboardingFeatureChat),
+                description:
+                    AppI18n.t(context, AppTextKey.onboardingFeatureChatDesc),
               ),
               const Spacer(),
               SizedBox(
@@ -600,7 +617,8 @@ class OnboardingPage extends StatelessWidget {
                   onPressed: () {
                     unawaited(onContinue());
                   },
-                  child: const Text('시작하기'),
+                  child: Text(
+                      AppI18n.t(context, AppTextKey.onboardingStartButton)),
                 ),
               ),
               const SizedBox(height: 10),
@@ -610,7 +628,8 @@ class OnboardingPage extends StatelessWidget {
                   onPressed: () {
                     unawaited(onEnterDemoMode());
                   },
-                  child: const Text('앱 둘러보기'),
+                  child:
+                      Text(AppI18n.t(context, AppTextKey.onboardingDemoButton)),
                 ),
               ),
             ],
@@ -7002,16 +7021,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final isBusy = _isReconnecting || _isConnectionActionInProgress;
     final actionLabel = _connectionActionLabel ??
         (_connectionType == ConnectionType.local
-            ? '로컬 서버 연결 요청 중...'
-            : '릴레이 세션 연결 요청 중...');
+            ? AppI18n.t(context, AppTextKey.connectionActionLocalConnecting)
+            : AppI18n.t(context, AppTextKey.connectionActionRelayConnecting));
     return Scaffold(
       appBar: AppBar(
-        title: const Text('연결'),
+        title: Text(AppI18n.t(context, AppTextKey.homeConnectionTitle)),
         actions: [
           _buildExitDemoModeButton(),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
-            tooltip: '설정',
+            tooltip: AppI18n.t(context, AppTextKey.settings),
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
@@ -7043,7 +7062,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '첫 연결을 시작해요',
+                  AppI18n.t(context, AppTextKey.connectionIntroTitle),
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w800,
@@ -7052,7 +7071,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '연결이 완료되면 Chat/Approvals/Sessions/Settings를 사용할 수 있어요.',
+                  AppI18n.t(context, AppTextKey.connectionIntroDescription),
                   style: TextStyle(
                     fontSize: 12,
                     height: 1.4,
@@ -7145,7 +7164,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.link),
-                    label: Text(isBusy ? '처리 중...' : '연결하기'),
+                    label: Text(isBusy
+                        ? AppI18n.t(context, AppTextKey.connectingAction)
+                        : AppI18n.t(context, AppTextKey.connectAction)),
                   ),
                 ),
                 if (!_isDemoMode && widget.onEnterDemoMode != null) ...[
@@ -7157,7 +7178,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                         unawaited(_enterDemoMode());
                       },
                       icon: const Icon(Icons.visibility),
-                      label: const Text('앱 둘러보기 시작'),
+                      label: Text(
+                          AppI18n.t(context, AppTextKey.onboardingDemoButton)),
                     ),
                   ),
                 ],
@@ -7194,14 +7216,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     child: OutlinedButton.icon(
                       onPressed: _forceStopReconnect,
                       icon: const Icon(Icons.stop_circle_outlined),
-                      label: const Text('자동 재연결 중지'),
+                      label: Text(
+                          AppI18n.t(context, AppTextKey.forceStopReconnect)),
                     ),
                   ),
                 ],
                 if (_lastConnectionError != null) ...[
                   const SizedBox(height: 10),
                   Text(
-                    '마지막 오류: $_lastConnectionError',
+                    '${AppI18n.t(context, AppTextKey.lastErrorLabel)}: $_lastConnectionError',
                     style: TextStyle(
                       fontSize: 11,
                       color: Theme.of(context).colorScheme.error,
@@ -7214,7 +7237,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           if (history.isNotEmpty) ...[
             const SizedBox(height: 16),
             Text(
-              '최근 연결',
+              AppI18n.t(context, AppTextKey.recentConnections),
               style: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w700,
@@ -7249,13 +7272,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   String _homeTabTitle(HomeTab tab) {
     switch (tab) {
       case HomeTab.chat:
-        return 'Chat';
+        return AppI18n.t(context, AppTextKey.homeTabChatTitle);
       case HomeTab.approvals:
-        return 'Approvals';
+        return AppI18n.t(context, AppTextKey.homeTabApprovalsTitle);
       case HomeTab.sessions:
-        return 'Sessions';
+        return AppI18n.t(context, AppTextKey.homeTabSessionsTitle);
       case HomeTab.settings:
-        return 'Settings';
+        return AppI18n.t(context, AppTextKey.homeTabSettingsTitle);
     }
   }
 
@@ -7263,14 +7286,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     switch (tab) {
       case HomeTab.chat:
         return _isConnected
-            ? '대화를 이어가고 Codex 진행 상황을 확인하세요.'
-            : '연결 후 바로 프롬프트를 보낼 수 있어요.';
+            ? AppI18n.t(context, AppTextKey.homeTabChatSubtitleConnected)
+            : AppI18n.t(context, AppTextKey.homeTabChatSubtitleDisconnected);
       case HomeTab.approvals:
-        return '모바일 승인 요청과 대기 중인 액션을 한곳에서 처리합니다.';
+        return AppI18n.t(context, AppTextKey.homeTabApprovalsSubtitle);
       case HomeTab.sessions:
-        return '연결 상태와 최근 연결 정보를 확인합니다.';
+        return AppI18n.t(context, AppTextKey.homeTabSessionsSubtitle);
       case HomeTab.settings:
-        return '앱 환경설정과 기본 동작을 정리합니다.';
+        return AppI18n.t(context, AppTextKey.homeTabSettingsSubtitle);
     }
   }
 
@@ -7347,13 +7370,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       onOpenSettings: () {
         Navigator.of(context).push(
           MaterialPageRoute(
-              builder: (context) => SettingsPage(
-                isDemoMode: _isDemoMode,
-                onExitDemoMode: widget.onExitDemoMode,
-                onEnterDemoMode: widget.onEnterDemoMode,
-              ),
+            builder: (context) => SettingsPage(
+              isDemoMode: _isDemoMode,
+              onExitDemoMode: widget.onExitDemoMode,
+              onEnterDemoMode: widget.onEnterDemoMode,
             ),
-          );
+          ),
+        );
       },
     );
   }
@@ -7441,7 +7464,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     ),
                     const SizedBox(width: 6),
                     Text(
-                      '응답 대기 중',
+                      AppI18n.t(context, AppTextKey.homeTabPendingResponse),
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
@@ -7455,18 +7478,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           // 설정 버튼
           IconButton(
             icon: const Icon(Icons.settings_outlined),
-            tooltip: _selectedHomeTab == HomeTab.settings ? '전체 설정' : '설정 탭',
+            tooltip: _selectedHomeTab == HomeTab.settings
+                ? AppI18n.t(context, AppTextKey.openFullSettings)
+                : AppI18n.t(context, AppTextKey.settingsTabHint),
             onPressed: () {
               if (_selectedHomeTab == HomeTab.settings) {
                 Navigator.of(context).push(
                   MaterialPageRoute(
-                  builder: (context) => SettingsPage(
-                    isDemoMode: _isDemoMode,
-                    onExitDemoMode: widget.onExitDemoMode,
-                    onEnterDemoMode: widget.onEnterDemoMode,
+                    builder: (context) => SettingsPage(
+                      isDemoMode: _isDemoMode,
+                      onExitDemoMode: widget.onExitDemoMode,
+                      onEnterDemoMode: widget.onEnterDemoMode,
+                    ),
                   ),
-                ),
-              );
+                );
                 return;
               }
               unawaited(_selectHomeTab(HomeTab.settings));
@@ -7513,7 +7538,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                               ),
                             ),
                             title: Text(
-                              _isConnected ? '연결됨' : '연결 안 됨',
+                              _isConnected
+                                  ? AppI18n.t(
+                                      context, AppTextKey.statusConnected)
+                                  : AppI18n.t(
+                                      context, AppTextKey.statusNotConnected),
                               style: TextStyle(
                                 fontWeight: FontWeight.w600,
                                 color: _isConnected
@@ -7526,11 +7555,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             subtitle: Text(
                               _isConnected
                                   ? (_connectionType == ConnectionType.local
-                                      ? '로컬 서버 모드'
+                                      ? AppI18n.t(
+                                          context, AppTextKey.localServerMode)
                                       : (_sessionId != null
-                                          ? '릴레이 모드 • 세션: $_sessionId'
-                                          : '릴레이 모드'))
-                                  : '연결을 설정하세요',
+                                          ? '${AppI18n.t(context, AppTextKey.relayServerMode)} • ${AppI18n.t(context, AppTextKey.sessionLabel)} $_sessionId'
+                                          : AppI18n.t(context,
+                                              AppTextKey.relayServerMode)))
+                                  : AppI18n.t(
+                                      context, AppTextKey.setConnectionHint),
                               style: TextStyle(
                                 fontSize: 12,
                                 color: Theme.of(context)
@@ -7548,7 +7580,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                   children: [
                                     // 연결 타입 선택
                                     Text(
-                                      '연결 타입',
+                                      AppI18n.t(context,
+                                          AppTextKey.connectionTypeLabel),
                                       style: TextStyle(
                                         fontSize: 14,
                                         fontWeight: FontWeight.w600,
@@ -7559,15 +7592,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                     ),
                                     const SizedBox(height: 12),
                                     SegmentedButton<ConnectionType>(
-                                      segments: const [
+                                      segments: [
                                         ButtonSegment<ConnectionType>(
                                           value: ConnectionType.local,
-                                          label: Text('로컬 서버'),
+                                          label: Text(AppI18n.t(context,
+                                              AppTextKey.localServerMode)),
                                           icon: Icon(Icons.computer, size: 18),
                                         ),
                                         ButtonSegment<ConnectionType>(
                                           value: ConnectionType.relay,
-                                          label: Text('릴레이 서버'),
+                                          label: Text(AppI18n.t(context,
+                                              AppTextKey.relayServerMode)),
                                           icon: Icon(Icons.cloud, size: 18),
                                         ),
                                       ],
@@ -7778,7 +7813,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                 CrossAxisAlignment.start,
                                             children: [
                                               Text(
-                                                '최근 연결',
+                                                AppI18n.t(
+                                                    context,
+                                                    AppTextKey
+                                                        .recentConnections),
                                                 style: TextStyle(
                                                   fontSize: 14,
                                                   fontWeight: FontWeight.w600,
@@ -7788,7 +7826,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                 ),
                                               ),
                                               Text(
-                                                '탭하면 재연결됩니다',
+                                                AppI18n.t(
+                                                    context,
+                                                    AppTextKey
+                                                        .tapReconnectHint),
                                                 style: TextStyle(
                                                   fontSize: 11,
                                                   color: Theme.of(context)

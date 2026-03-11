@@ -12,6 +12,7 @@ void main() {
     bool? showHistory,
   }) async {
     final mockValues = <String, Object>{};
+    mockValues['app_language'] = 'ko';
     if (themeModeIndex != null) mockValues['theme_mode'] = themeModeIndex;
     if (showHistory != null) mockValues['show_history'] = showHistory;
 
@@ -53,12 +54,12 @@ void main() {
 
       expect(find.text('테마'), findsOneWidget);
       expect(find.text('다크 모드'), findsOneWidget);
-      expect(find.text('앱 정보'), findsOneWidget);
-      expect(find.text('Codex Remote 0.2.0'), findsOneWidget);
+      expect(find.text('Codex Remote'), findsOneWidget);
+      expect(find.text('버전 0.2.0'), findsOneWidget);
 
       await tester.tap(find.text('테마'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('앱 정보'));
+      await tester.tap(find.text('Codex Remote'));
       await tester.pumpAndSettle();
       expect(openSettingsTapped, 2);
     });
@@ -77,8 +78,8 @@ void main() {
       final switchTile = tester.widget<SwitchListTile>(
         find.byType(SwitchListTile),
       );
-      expect(find.text('세션/히스토리 표시'), findsOneWidget);
-      expect(find.text('채팅 화면에 세션 및 대화 히스토리 섹션 표시'), findsOneWidget);
+      expect(find.text('세션 및 대화 히스토리'), findsOneWidget);
+      expect(find.text('메인 화면에 히스토리 섹션 표시'), findsOneWidget);
       expect(switchTile.value, isTrue);
 
       await tester.tap(find.byType(Switch));

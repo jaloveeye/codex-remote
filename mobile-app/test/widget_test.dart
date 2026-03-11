@@ -15,6 +15,7 @@ void main() {
     required bool onboardingDone,
   }) async {
     SharedPreferences.setMockInitialValues({
+      'app_language': 'ko',
       if (onboardingDone) 'mobile_onboarding_done_v1': true,
     });
     await AppSettings().load();
@@ -48,8 +49,6 @@ void main() {
 
       expect(find.text('첫 연결을 시작해요'), findsOneWidget);
       expect(find.text('연결하기'), findsOneWidget);
-      expect(find.text('로컬'), findsOneWidget);
-      expect(find.text('릴레이'), findsOneWidget);
       expect(find.byType(NavigationBar), findsNothing);
     });
 

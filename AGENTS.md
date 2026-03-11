@@ -40,3 +40,15 @@
 - 절차 정리: `skills/fm_06_procedure-playbook.md`
 - 인과 분석: `skills/fm_07_graph-rca.md`
 - 유지보수: `skills/fm_09_hygiene-maint.md`
+
+## 최근 작업 기록 (요약)
+- 일시: 2026-03-11
+- 브랜치: `feature/bilingual-web-extension`
+- 목적: 모바일 앱 다국어(i18n) 반영 검증 및 테스트 정합성 맞춤
+- 변경 파일: `mobile-app/lib/main.dart`, `mobile-app/lib/screens/settings_page.dart`, `mobile-app/lib/services/app_settings.dart`, `mobile-app/lib/services/app_i18n.dart`, `mobile-app/lib/widgets/*.dart`, `mobile-app/test/*.dart`, `mobile-app/pubspec.yaml`, `mobile-app/pubspec.lock`
+- 검증:
+  - `flutter analyze` (mobile-app): 통과(문법/타입 오류 없음, 100+ 기존/정보성 경고 존재)
+  - `flutter test` (mobile-app): 통과
+- 남은 리스크:
+  - 다수의 `withOpacity`, `deprecated` 경고 및 기존 코드 정리가 미적용(기능 동작에는 영향 없음).
+  - `AppI18n` 추가로 텍스트 키 누락/문구 품질 변경 시 테스트 문자열 동기화가 다시 필요.

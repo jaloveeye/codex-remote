@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../services/app_i18n.dart';
+
 class PromptOptionItem {
   final String value;
   final String label;
@@ -74,7 +76,7 @@ class ChatPromptOptionsBar extends StatelessWidget {
         children: [
           PopupMenuButton<String>(
             key: const Key('chat_model_selector'),
-            tooltip: '모델 선택',
+            tooltip: AppI18n.t(context, AppTextKey.promptModelSelectorTooltip),
             onSelected: onModelSelected,
             itemBuilder: (context) {
               return modelItems
@@ -88,14 +90,15 @@ class ChatPromptOptionsBar extends StatelessWidget {
             },
             child: _OptionChip(
               icon: Icons.smart_toy_outlined,
-              label: '모델',
+              label: AppI18n.t(context, AppTextKey.promptModelLabel),
               value: selectedModelLabel,
             ),
           ),
           const SizedBox(width: 8),
           PopupMenuButton<String>(
             key: const Key('chat_reasoning_selector'),
-            tooltip: '이성 선택',
+            tooltip:
+                AppI18n.t(context, AppTextKey.promptReasoningSelectorTooltip),
             onSelected: onReasoningSelected,
             itemBuilder: (context) {
               return reasoningItems
@@ -109,7 +112,7 @@ class ChatPromptOptionsBar extends StatelessWidget {
             },
             child: _OptionChip(
               icon: Icons.psychology_alt_outlined,
-              label: '이성',
+              label: AppI18n.t(context, AppTextKey.promptReasoningLabel),
               value: selectedReasoningLabel,
             ),
           ),

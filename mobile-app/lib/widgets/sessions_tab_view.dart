@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/connection_models.dart';
+import '../services/app_i18n.dart';
 import 'home_shell_widgets.dart';
 
 class SessionsTabView extends StatelessWidget {
@@ -36,10 +37,10 @@ class SessionsTabView extends StatelessWidget {
       children: [
         HomeTabIntroCard(
           icon: Icons.hub_outlined,
-          title: 'Sessions',
+          title: AppI18n.t(context, AppTextKey.sessionsTitle),
           subtitle: subtitle,
           trailing: IconButton(
-            tooltip: '새로고침',
+            tooltip: AppI18n.t(context, AppTextKey.refreshTooltip),
             onPressed: onRefresh,
             icon: const Icon(Icons.refresh),
           ),
@@ -62,7 +63,9 @@ class SessionsTabView extends StatelessWidget {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        isConnected ? '현재 연결됨' : '연결 안 됨',
+                        isConnected
+                            ? AppI18n.t(context, AppTextKey.statusConnected)
+                            : AppI18n.t(context, AppTextKey.statusNotConnected),
                         style: const TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w700,
@@ -72,12 +75,14 @@ class SessionsTabView extends StatelessWidget {
                     if (isConnected)
                       OutlinedButton(
                         onPressed: onDisconnect,
-                        child: const Text('연결 해제'),
+                        child: Text(
+                            AppI18n.t(context, AppTextKey.disconnectAction)),
                       )
                     else
                       FilledButton(
                         onPressed: onOpenChat,
-                        child: const Text('연결하기'),
+                        child:
+                            Text(AppI18n.t(context, AppTextKey.connectAction)),
                       ),
                   ],
                 ),
@@ -85,9 +90,10 @@ class SessionsTabView extends StatelessWidget {
                 Text(
                   isConnected
                       ? (connectionType == ConnectionType.local
-                          ? '로컬 서버에 연결되어 있습니다.'
-                          : '릴레이 세션 ${sessionId ?? '-'} 에 연결되어 있습니다.')
-                      : '채팅 탭에서 로컬 또는 릴레이 연결을 시작하세요.',
+                          ? AppI18n.t(
+                              context, AppTextKey.sessionsLocalConnectedText)
+                          : '${AppI18n.t(context, AppTextKey.sessionsRelayConnectedText)} ${sessionId ?? '-'}')
+                      : AppI18n.t(context, AppTextKey.sessionsDisconnectedHint),
                   style: TextStyle(
                     fontSize: 12,
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -96,7 +102,7 @@ class SessionsTabView extends StatelessWidget {
                 if (currentCodexSessionId != null) ...[
                   const SizedBox(height: 12),
                   Text(
-                    '현재 Codex 세션: $currentCodexSessionId',
+                    '${AppI18n.t(context, AppTextKey.currentCodexSessionLabel)} $currentCodexSessionId',
                     style: const TextStyle(
                       fontSize: 12,
                       fontFamily: 'monospace',
@@ -109,7 +115,7 @@ class SessionsTabView extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         Text(
-          '최근 연결',
+          AppI18n.t(context, AppTextKey.recentConnections),
           style: TextStyle(
             fontSize: 14,
             fontWeight: FontWeight.w700,
@@ -118,10 +124,10 @@ class SessionsTabView extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         if (connectionHistory.isEmpty)
-          const HomeEmptyStateCard(
+          HomeEmptyStateCard(
             icon: Icons.history_toggle_off,
-            title: '최근 연결이 없어요',
-            message: '세션에 연결하면 최근 연결 목록이 여기에 저장됩니다.',
+            title: AppI18n.t(context, AppTextKey.sessionsNoHistoryTitle),
+            message: AppI18n.t(context, AppTextKey.sessionsNoHistoryMessage),
           )
         else
           Card(
