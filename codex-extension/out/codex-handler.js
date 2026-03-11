@@ -1339,7 +1339,7 @@ class CodexHandler {
         const initializeResult = await this.sendRpcRequestRaw("initialize", {
             clientInfo: {
                 name: "codex-remote-extension",
-                version: "0.1.6",
+                version: "0.2.0",
             },
             capabilities: {},
         }, 15000);

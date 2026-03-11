@@ -11,6 +11,36 @@ enum ThemeModeSetting {
   system,
 }
 
+enum AppLanguageSetting {
+  system,
+  korean,
+  english,
+}
+
+extension AppLanguageSettingCode on AppLanguageSetting {
+  String get storageKey {
+    switch (this) {
+      case AppLanguageSetting.system:
+        return 'system';
+      case AppLanguageSetting.korean:
+        return 'ko';
+      case AppLanguageSetting.english:
+        return 'en';
+    }
+  }
+
+  Locale? get locale {
+    switch (this) {
+      case AppLanguageSetting.system:
+        return null;
+      case AppLanguageSetting.korean:
+        return const Locale('ko');
+      case AppLanguageSetting.english:
+        return const Locale('en');
+    }
+  }
+}
+
 class RuntimeCapabilitiesCache {
   const RuntimeCapabilitiesCache({
     required this.capabilities,
@@ -36,6 +66,7 @@ class AppSettings extends ChangeNotifier {
   static const String _keyConnectionHistory = 'connection_history';
   static const String _keyRuntimeCapabilitiesCache =
       'runtime_capabilities_cache';
+  static const String _keyAppLanguage = 'app_language';
 
   // 최대 히스토리 개수
   static const int _maxHistoryCount = 5;
@@ -47,6 +78,7 @@ class AppSettings extends ChangeNotifier {
   String _defaultModel = 'auto';
   String _defaultReasoningEffort = 'auto';
   bool _autoConnect = false;
+  AppLanguageSetting _appLanguage = AppLanguageSetting.system;
   List<ConnectionHistoryItem> _connectionHistory = [];
 
   // getters
@@ -56,6 +88,8 @@ class AppSettings extends ChangeNotifier {
   String get defaultModel => _defaultModel;
   String get defaultReasoningEffort => _defaultReasoningEffort;
   bool get autoConnect => _autoConnect;
+  AppLanguageSetting get appLanguage => _appLanguage;
+  Locale? get appLocale => _appLanguage.locale;
   List<ConnectionHistoryItem> get connectionHistory =>
       List.unmodifiable(_connectionHistory);
 
@@ -68,6 +102,15 @@ class AppSettings extends ChangeNotifier {
       case ThemeModeSetting.system:
         return ThemeMode.system;
     }
+  }
+
+  static AppLanguageSetting _parseAppLanguage(String? value) {
+    for (final language in AppLanguageSetting.values) {
+      if (language.storageKey == value) {
+        return language;
+      }
+    }
+    return AppLanguageSetting.system;
   }
 
   // 설정 로드
@@ -94,6 +137,9 @@ class AppSettings extends ChangeNotifier {
     // 자동 연결
     _autoConnect = prefs.getBool(_keyAutoConnect) ?? false;
 
+    // 앱 언어
+    _appLanguage = _parseAppLanguage(prefs.getString(_keyAppLanguage));
+
     // 연결 히스토리
     final historyJson = prefs.getString(_keyConnectionHistory);
     if (historyJson != null && historyJson.isNotEmpty) {
@@ -116,6 +162,14 @@ class AppSettings extends ChangeNotifier {
     _showHistory = value;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyShowHistory, value);
+    notifyListeners();
+  }
+
+  // 앱 언어 설정
+  Future<void> setAppLanguage(AppLanguageSetting language) async {
+    _appLanguage = language;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyAppLanguage, language.storageKey);
     notifyListeners();
   }
 

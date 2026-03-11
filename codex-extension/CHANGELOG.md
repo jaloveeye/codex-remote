@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0
+
+- Add English/Korean localization for web landing pages and extension metadata.
+- Update extension/package metadata and localized resource handling.
+- Bump app-facing versioning to 0.2.0 for release preparation.
+
 ## 0.1.6
 
 - Add codex-remote.jaloveeye.com quick link in the extension connections panel.

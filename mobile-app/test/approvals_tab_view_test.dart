@@ -2,6 +2,7 @@ import 'package:codex_remote/widgets/approvals_tab_view.dart';
 import 'package:codex_remote/widgets/home_shell_widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 void main() {
   Widget buildApprovalsTab({
@@ -12,6 +13,13 @@ void main() {
     List<Map<String, dynamic>> processedCommandApprovals = const [],
   }) {
     return MaterialApp(
+      locale: const Locale('ko'),
+      supportedLocales: const [Locale('en'), Locale('ko')],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       home: Scaffold(
         body: ApprovalsTabView(
           isConnected: isConnected,
