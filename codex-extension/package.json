@@ -1,7 +1,7 @@
 {
   "name": "codex-remote-extension",
-  "displayName": "Codex Remote",
-  "description": "Remote control Codex from your mobile device via WebSocket or Relay Server",
+  "displayName": "%extension.displayName%",
+  "description": "%extension.description%",
   "version": "0.1.6",
   "publisher": "jaloveeye",
   "license": "MIT",
@@ -37,61 +37,61 @@
     "commands": [
       {
         "command": "codexRemote.start",
-        "title": "Start Codex Remote Server"
+        "title": "%command.start%"
       },
       {
         "command": "codexRemote.stop",
-        "title": "Stop Codex Remote Server"
+        "title": "%command.stop%"
       },
       {
         "command": "codexRemote.toggle",
-        "title": "Toggle Codex Remote Server"
+        "title": "%command.toggle%"
       },
       {
         "command": "codexRemote.showConnections",
-        "title": "Codex Remote: 연결 정보 보기"
+        "title": "%command.showConnections%"
       },
       {
         "command": "codexRemote.statusBarClick",
-        "title": "Codex Remote: 릴레이 연결 (상태줄 클릭 시)"
+        "title": "%command.statusBarClick%"
       },
       {
         "command": "codexRemote.checkRelayServer",
-        "title": "Codex Remote: 릴레이 서버 상태 확인"
+        "title": "%command.checkRelayServer%"
       },
       {
         "command": "codexRemote.disconnectRelay",
-        "title": "Codex Remote: 릴레이 연결 끊기"
+        "title": "%command.disconnectRelay%"
       },
       {
         "command": "codexRemote.connectToRelaySessionById",
-        "title": "Codex Remote: 세션 ID로 릴레이 연결"
+        "title": "%command.connectSessionById%"
       },
       {
         "command": "codexRemote.setRelaySessionId",
-        "title": "Codex Remote: 릴레이 세션 ID 설정 (다음 시작 시 사용)"
+        "title": "%command.setRelaySessionId%"
       }
     ],
     "configuration": {
-      "title": "Codex Remote",
+      "title": "%extension.configurationTitle%",
       "properties": {
         "codexRemote.relayServerUrl": {
           "type": "string",
           "scope": "application",
           "default": "https://relay.example.com",
-          "description": "Base URL of the dedicated relay server used for remote sessions."
+          "description": "%config.relayServerUrl.description%"
         },
         "codexRemote.iosAppStoreUrl": {
           "type": "string",
           "scope": "application",
           "default": "",
-          "description": "iOS 앱스토어 링크. 미등록 시 빈 값으로 둡니다."
+          "description": "%config.iosStoreUrl.description%"
         },
         "codexRemote.androidPlayStoreUrl": {
           "type": "string",
           "scope": "application",
           "default": "",
-          "description": "Android Play 스토어 링크. 미등록 시 빈 값으로 둡니다."
+          "description": "%config.androidStoreUrl.description%"
         }
       }
     }
