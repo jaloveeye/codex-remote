@@ -7169,20 +7169,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                         : AppI18n.t(context, AppTextKey.connectAction)),
                   ),
                 ),
-                if (!_isDemoMode && widget.onEnterDemoMode != null) ...[
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        unawaited(_enterDemoMode());
-                      },
-                      icon: const Icon(Icons.visibility),
-                      label: Text(
-                          AppI18n.t(context, AppTextKey.onboardingDemoButton)),
-                    ),
-                  ),
-                ],
                 if (_isConnectionActionInProgress) ...[
                   const SizedBox(height: 10),
                   Row(
