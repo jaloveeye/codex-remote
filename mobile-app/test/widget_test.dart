@@ -67,7 +67,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('설정'), findsOneWidget);
-      expect(find.text('버전 0.1.6'), findsOneWidget);
+      expect(find.text('버전 0.2.0'), findsOneWidget);
     });
   });
 }

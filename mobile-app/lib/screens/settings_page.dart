@@ -367,7 +367,7 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
       ),
       title: const Text('Codex Remote'),
-      subtitle: const Text('버전 0.1.6'),
+      subtitle: const Text('버전 0.2.0'),
       onTap: () => _showAboutDialog(context),
     );
   }
@@ -376,7 +376,7 @@ class _SettingsPageState extends State<SettingsPage> {
     showAboutDialog(
       context: context,
       applicationName: 'Codex Remote',
-      applicationVersion: '0.1.6',
+      applicationVersion: '0.2.0',
       applicationIcon: Container(
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(

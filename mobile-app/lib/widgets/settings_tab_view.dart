@@ -54,7 +54,7 @@ class SettingsTabView extends StatelessWidget {
               ListTile(
                 leading: const Icon(Icons.info_outline),
                 title: const Text('앱 정보'),
-                subtitle: const Text('Codex Remote 0.1.6'),
+                subtitle: const Text('Codex Remote 0.2.0'),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: onOpenSettings,
               ),
@@ -64,7 +64,7 @@ class SettingsTabView extends StatelessWidget {
         const SizedBox(height: 12),
         HomeEmptyStateCard(
           icon: Icons.rocket_launch_outlined,
-          title: '0.1.6 준비 중',
+          title: '0.2.0 준비 중',
           message: '여기에는 출시형 설정, 진단, 브랜딩, 알림 옵션이 단계적으로 추가될 예정입니다.',
           action: FilledButton(
             onPressed: onOpenSettings,
