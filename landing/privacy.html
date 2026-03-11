@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Codex Remote 개인정보 처리방침</title>
+    <meta
+      name="description"
+      content="Codex Remote 개인정보 처리방침(버전: 0.1.6)"
+    />
+    <style>
+      :root {
+        --bg: #f8fafc;
+        --card: #ffffff;
+        --text: #0f172a;
+        --sub: #334155;
+        --line: #e2e8f0;
+        --brand: #4f46e5;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+          Helvetica, Arial, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+      }
+      .container {
+        max-width: 920px;
+        margin: 0 auto;
+        padding: 28px 20px 48px;
+      }
+      .hero {
+        background: linear-gradient(120deg, #eef2ff, #fff);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 22px;
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 2rem;
+      }
+      .muted {
+        color: var(--sub);
+        line-height: 1.75;
+      }
+      section {
+        margin-top: 20px;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 18px;
+      }
+      h2 {
+        margin: 0 0 10px;
+        font-size: 1.15rem;
+        color: #1d4ed8;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+      }
+      th,
+      td {
+        border: 1px solid var(--line);
+        padding: 10px;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: #f8fafc;
+        width: 28%;
+      }
+      ul {
+        line-height: 1.7;
+        margin: 0;
+        padding-left: 20px;
+      }
+      li {
+        margin-bottom: 8px;
+      }
+      a {
+        color: #1d4ed8;
+      }
+      .foot {
+        margin-top: 20px;
+        color: #334155;
+        border-top: 1px solid var(--line);
+        padding-top: 16px;
+      }
+      @media (max-width: 640px) {
+        h1 {
+          font-size: 1.6rem;
+        }
+        th {
+          width: 36%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="hero">
+        <p class="muted">개인정보 처리방침</p>
+        <h1>Codex Remote 개인정보 처리방침</h1>
+        <p class="muted">
+          본 방침은 Codex Remote(이하 “본 앱”)의 개인정보 처리 기준을 설명합니다.
+          본문은 앱 버전 0.1.6 기준이며, 시행일은 아래에 안내됩니다.
+        </p>
+        <p class="muted"><strong>시행일:</strong> 2026-03-11</p>
+      </div>
+
+      <section>
+        <h2>1) 처리하는 개인정보 항목</h2>
+        <table>
+          <tr>
+            <th>항목</th>
+            <th>수집·처리 사유</th>
+          </tr>
+          <tr>
+            <td>세션 ID, 서버 주소, 포트, 연결 설정</td>
+            <td>릴레이/로컬 연결 관리 및 빠른 재연결</td>
+          </tr>
+          <tr>
+            <td>사용자가 앱에서 입력한 프롬프트</td>
+            <td>Codex 서비스에 전달하여 응답 생성</td>
+          </tr>
+          <tr>
+            <td>에러 메시지 및 사용 로그(비식별 성격)</td>
+            <td>기능 안정화, 버그 원인 분석</td>
+          </tr>
+          <tr>
+            <td>앱 설정(테마/옵션/히스토리 표시)</td>
+            <td>개인 맞춤 UI 및 사용자 경험 개선</td>
+          </tr>
+          <tr>
+            <td>기기 식별 정보, 접속 IP</td>
+            <td>
+              앱 실행/보안/오남용 방지 목적의 네트워크 전달 시점에 제한적으로
+              처리될 수 있음
+            </td>
+          </tr>
+        </table>
+      </section>
+
+      <section>
+        <h2>2) 개인정보의 수집 및 이용 목적</h2>
+        <ul>
+          <li>원격/로컬 세션 연결 기능 제공</li>
+          <li>프롬프트 전송·스트리밍 응답 표시</li>
+          <li>히스토리 복원 및 세션 관리</li>
+          <li>앱 안정성 확보 및 버그 대응</li>
+          <li>보안 및 부정 사용 방지</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>3) 보관 기간</h2>
+        <ul>
+          <li>로컬 저장 데이터: 사용자가 앱을 삭제하거나 직접 삭제할 때까지</li>
+          <li>세션/로그 데이터: 앱 운영 목적이 달성되거나, 법령상 보관 의무가 있는 경우 해당 기간</li>
+          <li>통신 로그: 필요 최소 기간 후 즉시 폐기</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>4) 제3자 제공 및 위탁</h2>
+        <ul>
+          <li>법령에 근거한 경우 또는 이용자 동의가 있는 경우만 제공</li>
+          <li>현재 본 앱은 핵심 서비스 제공을 위해 외부 분석/광고 SDK를 기본 탑재하지 않습니다.</li>
+          <li>단, 앱 실행 환경(브라우저/기기), 릴레이 서버 자체의 로깅 정책은 해당 서비스의 운영 정책을 따릅니다.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>5) 사용자 권리</h2>
+        <ul>
+          <li>보유 데이터 열람/정정/삭제를 요청할 권리가 있습니다.</li>
+          <li>개인정보 처리에 대한 동의 철회 및 제한 요청이 가능합니다.</li>
+          <li>로컬 데이터 삭제는 앱 설정/캐시 삭제 또는 앱 삭제로 처리됩니다.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>6) 보안조치</h2>
+        <ul>
+          <li>HTTPS 통신 기반으로 릴레이/API 통신을 수행합니다.</li>
+          <li>민감 정보 평문 보관을 피하고, 필요 최소한의 데이터만 저장합니다.</li>
+          <li>접속 토큰/인증정보는 사용자가 직접 관리할 수 있어야 합니다.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>7) 쿠키 및 추적 기술</h2>
+        <p class="muted">
+          본 앱은 별도 쿠키 광고 추적 스크립트를 기본적으로 사용하지 않습니다.
+          다만 앱 배포 환경(예: 정적 호스팅/브라우저 캐시)에 따라
+          표준적인 접속 로그가 생성될 수 있습니다.
+        </p>
+      </section>
+
+      <section>
+        <h2>8) 아동의 개인정보</h2>
+        <p class="muted">
+          본 앱은 14세 미만 아동을 대상으로 하지 않습니다. 14세 미만 아동의
+          사용이 확인될 경우 보호자 동의를 받거나 관련 법령에 따라 처리 범위를
+          제한할 수 있습니다.
+        </p>
+      </section>
+
+      <section>
+        <h2>9) 개정</h2>
+        <p class="muted">
+          방침은 법령 변경, 서비스 변경 및 보안/운영 정책 변경 시 개정될 수
+          있으며, 개정 시 본 페이지 상단의 시행일을 갱신합니다.
+        </p>
+      </section>
+
+      <section>
+        <h2>10) 연락처</h2>
+        <p class="muted">
+          개인정보 관련 문의: <a href="mailto:privacy@your-domain.com">privacy@your-domain.com</a><br />
+          법적 문의: <a href="mailto:legal@your-domain.com">legal@your-domain.com</a>
+        </p>
+      </section>
+
+      <div class="foot">
+        본문 내 주소/이메일은 배포 환경에 맞게 실제 운영 정보로 교체해 주세요.
+      </div>
+    </div>
+  </body>
+</html>
+

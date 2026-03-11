@@ -3,17 +3,32 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models/connection_models.dart';
 import 'services/app_settings.dart';
+import 'screens/settings_page.dart';
+import 'widgets/approvals_tab_view.dart';
+import 'widgets/chat_prompt_options_bar.dart';
+import 'widgets/sessions_tab_view.dart';
+import 'widgets/settings_tab_view.dart';
 
 // Relay 서버 URL (빌드 시 --dart-define=RELAY_SERVER_URL=... 으로 덮어쓸 수 있음)
 const String RELAY_SERVER_URL = String.fromEnvironment(
   'RELAY_SERVER_URL',
   defaultValue: 'https://relay.example.com',
+);
+const bool DEMO_MODE = bool.fromEnvironment(
+  'DEMO_MODE',
+  defaultValue: false,
+);
+const String DEMO_START_TAB = String.fromEnvironment(
+  'DEMO_START_TAB',
+  defaultValue: 'chat',
 );
 
 void main() async {
@@ -364,10 +379,16 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
+  static const String _onboardingDoneKey = 'mobile_onboarding_done_v1';
+  bool _isBootstrapping = true;
+  bool _showOnboarding = false;
+  bool _demoModeEnabled = DEMO_MODE;
+
   @override
   void initState() {
     super.initState();
     AppSettings().addListener(_onSettingsChanged);
+    unawaited(_prepareLaunchFlow());
   }
 
   @override
@@ -380,6 +401,47 @@ class _MyAppState extends State<MyApp> {
     setState(() {});
   }
 
+  Future<void> _prepareLaunchFlow() async {
+    await Future<void>.delayed(const Duration(milliseconds: 900));
+
+    final prefs = await SharedPreferences.getInstance();
+    final onboardingDone = prefs.getBool(_onboardingDoneKey) ?? false;
+
+    if (!mounted) return;
+    setState(() {
+      _showOnboarding = !onboardingDone || DEMO_MODE;
+      _isBootstrapping = false;
+    });
+  }
+
+  Future<void> _completeOnboarding({bool demoMode = false}) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_onboardingDoneKey, true);
+    if (!mounted) return;
+    setState(() {
+      _showOnboarding = false;
+      _demoModeEnabled = demoMode;
+    });
+  }
+
+  Future<void> _enterDemoMode() async {
+    if (_demoModeEnabled || !mounted) return;
+    setState(() {
+      _showOnboarding = false;
+      _demoModeEnabled = true;
+    });
+  }
+
+  Future<void> _exitReviewMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_onboardingDoneKey, false);
+    if (!mounted) return;
+    setState(() {
+      _demoModeEnabled = false;
+      _showOnboarding = true;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -387,13 +449,254 @@ class _MyAppState extends State<MyApp> {
       theme: lightTheme,
       darkTheme: darkTheme,
       themeMode: AppSettings().themeModeValue,
-      home: const HomePage(),
+      home: _isBootstrapping
+          ? const SplashLaunchPage()
+          : (_showOnboarding
+              ? OnboardingPage(
+                  onContinue: _completeOnboarding,
+                  onEnterDemoMode: () => _completeOnboarding(demoMode: true),
+                )
+              : HomePage(
+                  demoMode: _demoModeEnabled,
+                  onExitDemoMode: _exitReviewMode,
+                  onEnterDemoMode: _enterDemoMode,
+                  initialTab: _resolveDemoStartTab(),
+                )),
+    );
+  }
+
+  HomeTab _resolveDemoStartTab() {
+    switch (DEMO_START_TAB.trim().toLowerCase()) {
+      case 'approvals':
+        return HomeTab.approvals;
+      case 'sessions':
+        return HomeTab.sessions;
+      case 'settings':
+        return HomeTab.settings;
+      case 'chat':
+      default:
+        return HomeTab.chat;
+    }
+  }
+}
+
+class SplashLaunchPage extends StatelessWidget {
+  const SplashLaunchPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 88,
+              height: 88,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: scheme.primaryContainer,
+                borderRadius: BorderRadius.circular(26),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: Image.asset('images/app_icon.png'),
+              ),
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Codex Remote',
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+                color: scheme.onSurface,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '연결 준비 중...',
+              style: TextStyle(
+                fontSize: 13,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 18),
+            SizedBox(
+              width: 120,
+              child: LinearProgressIndicator(
+                borderRadius: BorderRadius.circular(999),
+                minHeight: 6,
+                color: scheme.primary,
+                backgroundColor: scheme.surfaceContainerHighest,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class OnboardingPage extends StatelessWidget {
+  const OnboardingPage({
+    super.key,
+    required this.onContinue,
+    required this.onEnterDemoMode,
+  });
+
+  final Future<void> Function() onContinue;
+  final Future<void> Function() onEnterDemoMode;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Codex Remote 시작하기',
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.w800,
+                  color: scheme.onSurface,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                '모바일에서 승인 요청과 세션 상태를 빠르게 확인하세요.',
+                style: TextStyle(
+                  fontSize: 14,
+                  height: 1.45,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 28),
+              _OnboardingFeatureTile(
+                icon: Icons.hub_outlined,
+                title: '빠른 연결',
+                description: '로컬/릴레이 연결을 설정하고 Codex 세션에 즉시 접속',
+              ),
+              const SizedBox(height: 12),
+              _OnboardingFeatureTile(
+                icon: Icons.gpp_good_outlined,
+                title: '모바일 승인',
+                description: '승인 요청 도착 시 앱에서 바로 확인하고 처리',
+              ),
+              const SizedBox(height: 12),
+              _OnboardingFeatureTile(
+                icon: Icons.chat_bubble_outline,
+                title: '대화 이어가기',
+                description: 'Chat 탭에서 프롬프트/응답 흐름을 간결하게 관리',
+              ),
+              const Spacer(),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () {
+                    unawaited(onContinue());
+                  },
+                  child: const Text('시작하기'),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: () {
+                    unawaited(onEnterDemoMode());
+                  },
+                  child: const Text('앱 둘러보기'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _OnboardingFeatureTile extends StatelessWidget {
+  const _OnboardingFeatureTile({
+    required this.icon,
+    required this.title,
+    required this.description,
+  });
+
+  final IconData icon;
+  final String title;
+  final String description;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withOpacity(0.65),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: scheme.surface,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, size: 18, color: scheme.onSurfaceVariant),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: scheme.onSurface,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  description,
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.4,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+  const HomePage({
+    super.key,
+    this.demoMode = false,
+    this.onExitDemoMode,
+    this.onEnterDemoMode,
+    this.initialTab = HomeTab.chat,
+  });
+
+  final bool demoMode;
+  final Future<void> Function()? onExitDemoMode;
+  final Future<void> Function()? onEnterDemoMode;
+  final HomeTab initialTab;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -414,6 +717,7 @@ class MessageType {
   static const String terminalOutput = 'terminal_output';
   static const String system = 'system'; // Sent, Received, Command succeeded 등
   static const String log = 'log'; // 실시간 로그
+  static const String codexRawEvent = 'codex_raw_event';
 }
 
 // 필터 카테고리
@@ -431,15 +735,44 @@ enum LogLevel {
   info, // 정보
 }
 
+enum AutoDecisionMode {
+  off,
+  approve,
+  reject,
+}
+
+enum HomeTab {
+  chat,
+  approvals,
+  sessions,
+  settings,
+}
+
+enum ModelCatalogLoadStage {
+  idle,
+  loading,
+  defaultReady,
+  syncingAll,
+  completed,
+  delayed,
+  failed,
+}
+
 class MessageItem {
   final String text;
   final String type; // MessageType 상수 사용
   final DateTime timestamp;
   String? agentMode; // 에이전트 모드 (userPrompt 타입일 때만 사용)
   LogLevel? logLevel; // 로그 레벨 (log 타입일 때만 사용)
+  String? logSource; // 로그 소스 (log 타입일 때만 사용)
+  String? logChannel; // local/relay 채널 표시용
 
   MessageItem(this.text,
-      {this.type = MessageType.normal, this.agentMode, this.logLevel})
+      {this.type = MessageType.normal,
+      this.agentMode,
+      this.logLevel,
+      this.logSource,
+      this.logChannel})
       : timestamp = DateTime.now();
 
   // 필터 카테고리 결정
@@ -455,6 +788,7 @@ class MessageItem {
       case MessageType.userPrompt:
         return MessageFilter.userPrompt;
       case MessageType.log:
+      case MessageType.codexRawEvent:
         return MessageFilter.log;
       case MessageType.system:
       case MessageType.normal:
@@ -467,6 +801,10 @@ class MessageItem {
 }
 
 class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+  bool get _isDemoMode => widget.demoMode;
+
+  HomeTab _selectedHomeTab = HomeTab.chat;
+
   // 연결 타입
   ConnectionType _connectionType = ConnectionType.relay;
 
@@ -481,6 +819,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   String? _currentClientId; // 현재 클라이언트 ID
   Timer? _pollTimer;
   Timer? _capabilitiesLoadTimer;
+  Timer? _capabilitiesStageTimer;
+  Timer? _capabilitiesFollowupTimer;
   bool _isRelayPollInFlight = false;
 
   // 스트리밍 관련
@@ -494,10 +834,29 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   List<Map<String, dynamic>> _pendingCommandApprovals = [];
   List<Map<String, dynamic>> _pendingCodexServerRequests = [];
   List<Map<String, dynamic>> _recentCommandEvents = [];
+  final Map<String, Map<String, dynamic>> _resolvedApprovalEventFallbacks = {};
+  final Set<String> _seenCommandApprovalIds = <String>{};
+  final Set<String> _seenCodexRequestIds = <String>{};
+  AutoDecisionMode _autoDecisionMode = AutoDecisionMode.off;
+  int _autoDecisionTimeoutSec = 30;
+  final Map<String, Timer> _autoDecisionTimers = <String, Timer>{};
   bool _loadingCommandApprovals = false;
   bool _loadingCommandEvents = false;
   final Set<String> _submittingCodexRequestIds = <String>{};
   DateTime? _lastCommandMetaRefreshAt;
+  final FlutterLocalNotificationsPlugin _localNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+  bool _isNetworkReachable = true;
+  bool _isAppForeground = true;
+  int _notificationSequence = 1000;
+  static const AndroidNotificationChannel _approvalNotificationChannel =
+      AndroidNotificationChannel(
+    'approval_requests',
+    '승인 요청',
+    description: 'Codex/Relay 승인 요청 알림',
+    importance: Importance.high,
+  );
 
   /// 같은 세션 재연결 시 메인 목록에 히스토리 반영용 (get_chat_history 응답 시 사용)
   bool _loadingSessionHistoryForDisplay = false;
@@ -515,6 +874,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Timer? _reconnectTimer;
   int _reconnectAttempts = 0;
   bool _isReconnecting = false;
+  bool _isConnectionActionInProgress = false;
+  String? _connectionActionLabel;
   String? _lastConnectionError;
 
   // 런타임 옵션 관련
@@ -560,6 +921,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       List<Map<String, dynamic>>.from(_fallbackModels);
   bool _supportsIdeContext = false;
   bool _supportsFlatMode = false;
+  bool _capabilitiesFromCache = false;
+  ModelCatalogLoadStage _modelCatalogLoadStage = ModelCatalogLoadStage.idle;
+  int _capabilitiesFollowupAttempts = 0;
+  static const int _maxCapabilitiesFollowupAttempts = 3;
+  DateTime? _runtimeCapabilitiesRequestedAt;
   String? _actualSelectedMode; // 자동 모드로 선택된 경우 실제 선택된 모드 (null이면 사용자가 직접 선택)
   MessageItem? _lastUserPrompt; // 마지막 User Prompt 메시지 (모드 업데이트용)
 
@@ -568,7 +934,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final TextEditingController _sessionIdController = TextEditingController();
 
   // 입력창 상태 관리
-  int _textFieldKey = 0; // TextField 재생성용 Key
   DateTime? _lastPromptSubmitTime; // Enter 중복 전송 방지용 debounce
   final FocusNode _sessionIdFocusNode = FocusNode();
   final FocusNode _localIpFocusNode = FocusNode();
@@ -582,7 +947,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool _canScrollDown = false;
 
   /// 연결 후 컴팩트 뷰 (메시지 크게 + 한줄 프롬프트만)
-  bool _isCompactView = false;
+  bool _isCompactView = true;
 
   // 필터 상태 (기본값: AI 응답 + 사용자 프롬프트만 활성화)
   final Map<MessageFilter, bool> _activeFilters = {
@@ -705,6 +1070,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   // 로컬 서버 연결
   Future<void> _connectToLocal() async {
+    if (_isDemoMode) {
+      _activateDemoMode();
+      return;
+    }
+
     final ip = _localIpController.text.trim();
     if (ip.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -769,10 +1139,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _lastConnectionError = null;
         _capabilitiesLoaded = false;
         _capabilitiesLoading = false;
+        _capabilitiesFromCache = false;
+        _modelCatalogLoadStage = ModelCatalogLoadStage.idle;
+        _capabilitiesFollowupAttempts = 0;
+        _runtimeCapabilitiesRequestedAt = null;
         _supportsIdeContext = false;
         _supportsFlatMode = false;
         _useIdeContext = false;
         _useFlatMode = false;
+        _cancelCapabilitiesSequenceTimers();
         _stopReconnect();
         _messages.add(MessageItem(
             '✅ Connected to Extension WebSocket server at $ip:$port',
@@ -933,8 +1308,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             }
           } else {
             if (data['command_type'] == 'get_runtime_capabilities') {
-              _capabilitiesLoadTimer?.cancel();
               _capabilitiesLoading = false;
+              _modelCatalogLoadStage = ModelCatalogLoadStage.failed;
+              _runtimeCapabilitiesRequestedAt = null;
+              _cancelCapabilitiesSequenceTimers();
             }
             _messages.add(MessageItem('❌ Command failed: ${data['error']}',
                 type: MessageType.system));
@@ -947,42 +1324,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           _handleCodexServerRequestStatus(
               Map<String, dynamic>.from(data as Map));
         } else if (type == 'log') {
-          // 실시간 로그 메시지 처리
-          final logLevelStr = data['level'] ?? 'info';
-          final logMessage = data['message'] ?? '';
-          final logSource = data['source'] ?? 'unknown';
-          final logError = data['error'];
-
-          // 로그 레벨 파싱
-          LogLevel parsedLogLevel;
-          switch (logLevelStr) {
-            case 'error':
-              parsedLogLevel = LogLevel.error;
-              break;
-            case 'warn':
-            case 'warning':
-              parsedLogLevel = LogLevel.warning;
-              break;
-            default:
-              parsedLogLevel = LogLevel.info;
-          }
-
-          String logPrefix = '';
-          switch (logSource) {
-            case 'extension':
-              logPrefix = '🔌 [Extension]';
-              break;
-            default:
-              logPrefix = '📝 [Log]';
-          }
-
-          String logText = '$logPrefix $logMessage';
-          if (logError != null) {
-            logText += ' - Error: $logError';
-          }
-
-          _messages.add(MessageItem(logText,
-              type: MessageType.log, logLevel: parsedLogLevel));
+          _appendPrettyLogMessage(data, channel: 'local');
         } else if (type == 'agent_mode_selected') {
           // 자동 모드로 선택된 실제 모드 정보
           final requestedMode = data['requestedMode'] ?? 'auto';
@@ -1091,6 +1433,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           Future.delayed(const Duration(milliseconds: 150), () {
             _loadRuntimeCapabilities();
           });
+        } else if (type == 'codex_raw_notification' ||
+            type == 'codex_notification') {
+          _recordCodexRawNotification(data, channel: 'local');
+        } else {
+          _recordUnhandledIncomingMessage(type.toString(), data, 'local');
         }
       });
       _scrollToBottom();
@@ -1114,55 +1461,89 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       context: context,
       barrierDismissible: false,
       useSafeArea: true,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('PIN 입력'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                '이 세션은 PC에서 PIN 보호가 설정되어 있습니다.\nPC에서 설정한 4~6자리 숫자 PIN을 입력하세요.',
-                style: TextStyle(fontSize: 14),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: controller,
-                keyboardType: TextInputType.text,
-                obscureText: true,
-                maxLength: 6,
-                autofocus: true,
-                textInputAction: TextInputAction.done,
-                onSubmitted: (_) => navigator.pop(controller.text.trim()),
-                inputFormatters: [
-                  FilteringTextInputFormatter.digitsOnly,
+      builder: (dialogContext) {
+        var isSubmitting = false;
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) => AlertDialog(
+            title: const Text('PIN 입력'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '이 세션은 PC에서 PIN 보호가 설정되어 있습니다.\nPC에서 설정한 4~6자리 숫자 PIN을 입력하세요.',
+                    style: TextStyle(fontSize: 14),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: controller,
+                    keyboardType: TextInputType.text,
+                    obscureText: true,
+                    maxLength: 6,
+                    autofocus: true,
+                    textInputAction: TextInputAction.done,
+                    enabled: !isSubmitting,
+                    onSubmitted: (_) async {
+                      final value = controller.text.trim();
+                      if (value.length < 4 || value.length > 6) return;
+                      setDialogState(() => isSubmitting = true);
+                      await Future<void>.delayed(
+                          const Duration(milliseconds: 140));
+                      if (ctx.mounted) navigator.pop(value);
+                    },
+                    inputFormatters: [
+                      FilteringTextInputFormatter.digitsOnly,
+                    ],
+                    decoration: const InputDecoration(
+                      labelText: 'PIN',
+                      hintText: '4~6자리 숫자',
+                      counterText: '',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
                 ],
-                decoration: const InputDecoration(
-                  labelText: 'PIN',
-                  hintText: '4~6자리 숫자',
-                  counterText: '',
-                  border: OutlineInputBorder(),
-                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: isSubmitting ? null : () => navigator.pop(null),
+                child: const Text('취소'),
+              ),
+              FilledButton.icon(
+                onPressed: isSubmitting
+                    ? null
+                    : () async {
+                        final value = controller.text.trim();
+                        if (value.length < 4 || value.length > 6) return;
+                        setDialogState(() => isSubmitting = true);
+                        await Future<void>.delayed(
+                            const Duration(milliseconds: 140));
+                        if (ctx.mounted) navigator.pop(value);
+                      },
+                icon: isSubmitting
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.check),
+                label: Text(isSubmitting ? '확인 중...' : '확인'),
               ),
             ],
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => navigator.pop(null),
-            child: const Text('취소'),
-          ),
-          FilledButton(
-            onPressed: () => navigator.pop(controller.text.trim()),
-            child: const Text('확인'),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
   // 기존 세션에 연결 (PIN은 PC가 설정한 경우에만 전달)
   Future<void> _connectToSession(String sessionId, [String? pin]) async {
+    if (_isDemoMode) {
+      _activateDemoMode();
+      return;
+    }
+
     if (sessionId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('세션 ID를 입력하세요')),
@@ -1216,10 +1597,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           _lastCommandMetaRefreshAt = null;
           _capabilitiesLoaded = false;
           _capabilitiesLoading = false;
+          _capabilitiesFromCache = false;
+          _modelCatalogLoadStage = ModelCatalogLoadStage.idle;
+          _capabilitiesFollowupAttempts = 0;
+          _runtimeCapabilitiesRequestedAt = null;
           _supportsIdeContext = false;
           _supportsFlatMode = false;
           _useIdeContext = false;
           _useFlatMode = false;
+          _cancelCapabilitiesSequenceTimers();
           _stopReconnect();
           _messages.add(MessageItem('✅ Connected to session $sessionId',
               type: MessageType.system));
@@ -1267,15 +1653,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         // PC가 PIN을 설정한 세션 → PIN 입력 후 재시도
         if (!mounted) return;
         setState(() {
+          _connectionActionLabel = 'PIN 입력 대기 중...';
           _messages.add(MessageItem('이 세션은 PIN이 필요합니다. PIN을 입력하세요.',
               type: MessageType.system));
         });
         final enteredPin = await _showPinDialog();
         if (!mounted) return;
         if (enteredPin != null && enteredPin.isNotEmpty) {
+          setState(() => _connectionActionLabel = 'PIN 확인 후 연결 중...');
           await _connectToSession(sessionId, enteredPin);
         } else {
           setState(() {
+            _connectionActionLabel = null;
             _messages.add(MessageItem('PIN을 입력하지 않아 연결하지 않았습니다.',
                 type: MessageType.system));
           });
@@ -1336,10 +1725,40 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
-  void _connect() {
+  Future<void> _connect() async {
+    if (_isDemoMode) {
+      _activateDemoMode();
+      return;
+    }
+    if (_isConnectionActionInProgress || _isConnected || _isReconnecting) {
+      return;
+    }
+
+    setState(() {
+      _isConnectionActionInProgress = true;
+      _connectionActionLabel = _connectionType == ConnectionType.local
+          ? '로컬 서버 연결 준비 중...'
+          : '릴레이 세션 연결 준비 중...';
+      _lastConnectionError = null;
+    });
+
     if (_connectionType == ConnectionType.local) {
       // 로컬 서버 연결
-      _connectToLocal();
+      try {
+        setState(() => _connectionActionLabel = '로컬 서버 연결 요청 중...');
+        await _connectToLocal();
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isConnectionActionInProgress = false;
+            if (_isConnected || _isReconnecting) {
+              _connectionActionLabel = null;
+            } else {
+              _connectionActionLabel = '연결 요청이 완료되지 않았습니다.';
+            }
+          });
+        }
+      }
     } else {
       // 릴레이 서버 연결: 무조건 익스텐션에서 먼저 활성화 후 세션 ID 입력
       final sessionId = _sessionIdController.text.trim();
@@ -1353,15 +1772,37 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               duration: Duration(seconds: 5),
             ),
           );
+          setState(() {
+            _isConnectionActionInProgress = false;
+            _connectionActionLabel = null;
+          });
         }
         return;
       }
-      _connectToSession(sessionId);
+      try {
+        setState(() => _connectionActionLabel = '릴레이 세션 연결 요청 중...');
+        await _connectToSession(sessionId);
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isConnectionActionInProgress = false;
+            if (_isConnected || _isReconnecting) {
+              _connectionActionLabel = null;
+            } else {
+              _connectionActionLabel = '연결 요청이 완료되지 않았습니다.';
+            }
+          });
+        }
+      }
     }
   }
 
   // 히스토리에서 연결
   void _connectFromHistory(ConnectionHistoryItem item) {
+    if (_isDemoMode) {
+      _activateDemoMode();
+      return;
+    }
     setState(() {
       _connectionType = item.type;
       if (item.type == ConnectionType.local) {
@@ -1375,11 +1816,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     });
 
     // 연결 시도
-    _connect();
+    unawaited(_connect());
   }
 
   // 메시지 폴링 시작
   void _startPolling() {
+    if (_isDemoMode) return;
     _stopPolling(); // 기존 타이머 정지
 
     _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
@@ -1388,6 +1830,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _pollRelayMessagesOnce() async {
+    if (_isDemoMode) return;
     if (!_isConnected || _sessionId == null || _isRelayPollInFlight) return;
 
     _isRelayPollInFlight = true;
@@ -1508,8 +1951,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           }
         } else {
           if (messageData['command_type'] == 'get_runtime_capabilities') {
-            _capabilitiesLoadTimer?.cancel();
             _capabilitiesLoading = false;
+            _modelCatalogLoadStage = ModelCatalogLoadStage.failed;
+            _runtimeCapabilitiesRequestedAt = null;
+            _cancelCapabilitiesSequenceTimers();
           }
           _messages.add(MessageItem('❌ Command failed: ${messageData['error']}',
               type: MessageType.system));
@@ -1737,45 +2182,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           );
         }
       } else if (type == 'log') {
-        // 실시간 로그 메시지 처리
-        final logLevelStr = messageData['level'] ?? 'info';
-        final logMessage = messageData['message'] ?? '';
-        final logSource = messageData['source'] ?? 'unknown';
-        final logError = messageData['error'];
-
-        // 로그 레벨 파싱
-        LogLevel parsedLogLevel;
-        switch (logLevelStr) {
-          case 'error':
-            parsedLogLevel = LogLevel.error;
-            break;
-          case 'warn':
-          case 'warning':
-            parsedLogLevel = LogLevel.warning;
-            break;
-          default:
-            parsedLogLevel = LogLevel.info;
-        }
-
-        String logPrefix = '';
-        switch (logSource) {
-          case 'extension':
-            logPrefix = '🔌 [Extension]';
-            break;
-          default:
-            logPrefix = '📝 [Log]';
-        }
-
-        String logText = '$logPrefix $logMessage';
-        if (logError != null) {
-          logText += ' - Error: $logError';
-        }
-
         setState(() {
-          _messages.add(MessageItem(logText,
-              type: MessageType.log, logLevel: parsedLogLevel));
+          _appendPrettyLogMessage(messageData, channel: 'relay');
         });
         _scrollToBottom();
+      } else if (type == 'codex_raw_notification' ||
+          type == 'codex_notification') {
+        _recordCodexRawNotification(messageData, channel: 'relay');
+      } else {
+        _recordUnhandledIncomingMessage(type.toString(), messageData, 'relay');
       }
     });
     _scrollToBottom();
@@ -1925,6 +2340,110 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return model;
   }
 
+  String _getReasoningEffortDisplayName(String effort) {
+    final normalized = effort.trim();
+    if (normalized.isEmpty || normalized == 'auto') return 'Auto';
+    return '${normalized[0].toUpperCase()}${normalized.substring(1)}';
+  }
+
+  String _restoreSavedSelectionValue(String value) {
+    final normalized = value.trim();
+    return normalized.isEmpty ? 'auto' : normalized;
+  }
+
+  String get _modelCatalogLoadingText {
+    switch (_modelCatalogLoadStage) {
+      case ModelCatalogLoadStage.loading:
+        return '모델 목록을 불러오는 중...';
+      case ModelCatalogLoadStage.defaultReady:
+        return '기본 모델 로딩 성공. 전체 모델을 준비 중...';
+      case ModelCatalogLoadStage.syncingAll:
+        return '이후 모든 모델을 불러오고 있습니다...';
+      case ModelCatalogLoadStage.delayed:
+        return '전체 모델 동기화가 지연되어 기본 모델을 사용 중입니다.';
+      case ModelCatalogLoadStage.failed:
+        return '모델 목록 로딩에 실패했어요. 다시 시도해 주세요.';
+      case ModelCatalogLoadStage.completed:
+      case ModelCatalogLoadStage.idle:
+        return '모델 목록을 불러오는 중...';
+    }
+  }
+
+  void _cancelCapabilitiesSequenceTimers() {
+    _capabilitiesLoadTimer?.cancel();
+    _capabilitiesStageTimer?.cancel();
+    _capabilitiesFollowupTimer?.cancel();
+  }
+
+  void _armCapabilitiesLoadTimeout() {
+    _capabilitiesLoadTimer?.cancel();
+    _capabilitiesLoadTimer = Timer(const Duration(seconds: 4), () {
+      if (!mounted || !_capabilitiesLoading || _capabilitiesLoaded) return;
+      final shouldNotify =
+          _modelCatalogLoadStage != ModelCatalogLoadStage.delayed;
+      setState(() {
+        _modelCatalogLoadStage = ModelCatalogLoadStage.delayed;
+        if (shouldNotify) {
+          final elapsedSec = _runtimeCapabilitiesRequestedAt == null
+              ? null
+              : DateTime.now()
+                  .difference(_runtimeCapabilitiesRequestedAt!)
+                  .inSeconds;
+          _messages.add(MessageItem(
+              elapsedSec == null
+                  ? '⚠️ 전체 모델 로딩이 지연되어 기본 모델로 먼저 사용할게요.'
+                  : '⚠️ 전체 모델 로딩이 ${elapsedSec}초 이상 지연되어 기본 모델로 먼저 사용할게요.',
+              type: MessageType.system));
+        }
+      });
+      if (_capabilitiesFollowupAttempts < _maxCapabilitiesFollowupAttempts) {
+        _scheduleCapabilitiesFollowupLoad();
+        _armCapabilitiesLoadTimeout();
+      }
+    });
+  }
+
+  void _startCapabilitiesLoadSequence() {
+    _capabilitiesStageTimer?.cancel();
+    _capabilitiesStageTimer = Timer(const Duration(milliseconds: 450), () {
+      if (!mounted || !_capabilitiesLoading || _capabilitiesLoaded) return;
+      final defaultModelLabel =
+          _getModelDisplayName(_getDefaultModelFromCapabilities());
+      setState(() {
+        _modelCatalogLoadStage = ModelCatalogLoadStage.defaultReady;
+        _messages.add(MessageItem('✅ 기본 모델 로딩 성공: $defaultModelLabel',
+            type: MessageType.system));
+      });
+      _capabilitiesStageTimer = Timer(const Duration(milliseconds: 700), () {
+        if (!mounted || !_capabilitiesLoading || _capabilitiesLoaded) return;
+        setState(() {
+          _modelCatalogLoadStage = ModelCatalogLoadStage.syncingAll;
+          _messages.add(MessageItem('🔄 이후 모든 모델을 불러오고 있습니다...',
+              type: MessageType.system));
+        });
+      });
+    });
+  }
+
+  void _scheduleCapabilitiesFollowupLoad() {
+    if (!_isConnected ||
+        _capabilitiesFollowupAttempts >= _maxCapabilitiesFollowupAttempts) {
+      return;
+    }
+    _capabilitiesFollowupAttempts += 1;
+    _capabilitiesFollowupTimer?.cancel();
+    _capabilitiesFollowupTimer = Timer(const Duration(milliseconds: 900), () {
+      if (!mounted || !_isConnected || _capabilitiesLoaded) return;
+      unawaited(
+          _sendCommand('get_runtime_capabilities', clientId: _currentClientId));
+      if (_connectionType == ConnectionType.relay) {
+        Future.delayed(const Duration(milliseconds: 120), () {
+          unawaited(_pollRelayMessagesOnce());
+        });
+      }
+    });
+  }
+
   void _applyRuntimeCapabilities(Map<String, dynamic> capabilities) {
     final rawAgentModes = capabilities['agentModes'];
     final rawModels = capabilities['models'];
@@ -2015,15 +2534,65 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       return;
     }
 
-    _capabilitiesLoadTimer?.cancel();
-    _capabilitiesLoading = false;
+    final wasLoaded = _capabilitiesLoaded;
+    final wasLoading = _capabilitiesLoading;
+    final previousModelCount = _availableModels.length;
     _applyRuntimeCapabilities(data);
-    _messages.add(MessageItem(
-      '🧩 Runtime capabilities loaded: ${_availableModels.length} model(s), '
-      'IDE context ${_supportsIdeContext ? 'enabled' : 'unsupported'}, '
-      'flat mode ${_supportsFlatMode ? 'enabled' : 'unsupported'}',
-      type: MessageType.system,
-    ));
+    if (_capabilitiesLoaded) {
+      _cancelCapabilitiesSequenceTimers();
+      _capabilitiesLoading = false;
+      _capabilitiesFromCache = false;
+      _capabilitiesFollowupAttempts = 0;
+      _modelCatalogLoadStage = ModelCatalogLoadStage.completed;
+      if (wasLoading || !wasLoaded) {
+        final defaultModelLabel =
+            _getModelDisplayName(_getDefaultModelFromCapabilities());
+        final elapsedMs = _runtimeCapabilitiesRequestedAt == null
+            ? null
+            : DateTime.now()
+                .difference(_runtimeCapabilitiesRequestedAt!)
+                .inMilliseconds;
+        _messages.add(MessageItem(
+          elapsedMs == null
+              ? '🔔 전체 모델 로딩 완료: ${_availableModels.length}개 '
+                  '(기본: $defaultModelLabel)'
+              : '🔔 전체 모델 로딩 완료: ${_availableModels.length}개 '
+                  '(기본: $defaultModelLabel, ${elapsedMs}ms)',
+          type: MessageType.system,
+        ));
+        if (previousModelCount > 0 &&
+            previousModelCount != _availableModels.length) {
+          _messages.add(MessageItem(
+              '🔁 모델 목록 갱신: $previousModelCount개 → ${_availableModels.length}개',
+              type: MessageType.system));
+        }
+      }
+      unawaited(AppSettings().saveRuntimeCapabilitiesCache(
+        Map<String, dynamic>.from(data),
+      ));
+      _runtimeCapabilitiesRequestedAt = null;
+      _messages.add(MessageItem(
+        '🧩 Runtime capabilities loaded: ${_availableModels.length} model(s), '
+        'IDE context ${_supportsIdeContext ? 'enabled' : 'unsupported'}, '
+        'flat mode ${_supportsFlatMode ? 'enabled' : 'unsupported'}',
+        type: MessageType.system,
+      ));
+      return;
+    }
+
+    _capabilitiesLoading = true;
+    _capabilitiesFromCache = false;
+    _modelCatalogLoadStage = ModelCatalogLoadStage.syncingAll;
+    if (wasLoading && _capabilitiesFollowupAttempts == 0) {
+      final defaultModelLabel =
+          _getModelDisplayName(_getDefaultModelFromCapabilities());
+      _messages.add(MessageItem('✅ 기본 모델 로딩 성공: $defaultModelLabel',
+          type: MessageType.system));
+      _messages.add(
+          MessageItem('🔄 이후 모든 모델을 불러오고 있습니다...', type: MessageType.system));
+    }
+    _armCapabilitiesLoadTimeout();
+    _scheduleCapabilitiesFollowupLoad();
   }
 
   // 텍스트 내용을 분석하여 적절한 에이전트 모드 자동 선택 (Extension의 detectAgentMode와 동일한 로직)
@@ -2122,9 +2691,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   void _disconnect() {
+    if (_isDemoMode) {
+      if (mounted) {
+        _messages.add(MessageItem(
+          '심사 모드에서는 연결 종료 버튼이 샘플 동작입니다.',
+          type: MessageType.system,
+        ));
+        _scrollToBottom();
+      }
+      return;
+    }
+
     _stopPolling();
+    _cancelAllAutoDecisionTimers();
     _stopReconnect(); // 재연결 중지
-    _capabilitiesLoadTimer?.cancel();
+    _cancelCapabilitiesSequenceTimers();
 
     // 로컬 WebSocket 연결 종료
     _localWebSocket?.sink.close();
@@ -2135,6 +2716,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _isConnected = false;
         _sessionId = null;
         _isReconnecting = false;
+        _isConnectionActionInProgress = false;
+        _connectionActionLabel = null;
         _reconnectAttempts = 0;
         _pendingCommandApprovals = [];
         _pendingCodexServerRequests = [];
@@ -2144,6 +2727,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _lastCommandMetaRefreshAt = null;
         _capabilitiesLoaded = false;
         _capabilitiesLoading = false;
+        _capabilitiesFromCache = false;
+        _modelCatalogLoadStage = ModelCatalogLoadStage.idle;
+        _capabilitiesFollowupAttempts = 0;
+        _runtimeCapabilitiesRequestedAt = null;
         _supportsIdeContext = false;
         _supportsFlatMode = false;
         _useIdeContext = false;
@@ -2155,6 +2742,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   // 재연결 스케줄링
   void _scheduleReconnect() {
+    if (_isDemoMode) return;
     if (_isReconnecting || _isConnected) return;
 
     const maxAttempts = 5;
@@ -2204,11 +2792,25 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _isReconnecting = false;
   }
 
+  void _forceStopReconnect() {
+    if (!_isReconnecting && _reconnectTimer == null) return;
+    _stopReconnect();
+    if (!mounted) return;
+    setState(() {
+      _messages.add(
+        MessageItem(
+          '⏹️ 자동 재연결을 중지했습니다. 필요하면 다시 연결해주세요.',
+          type: MessageType.system,
+        ),
+      );
+    });
+  }
+
   // 수동 재연결
   void _manualReconnect() {
     _stopReconnect();
     _reconnectAttempts = 0;
-    _connect();
+    unawaited(_connect());
   }
 
   Future<void> _sendCommand(String type,
@@ -2229,6 +2831,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       String? reasoningEffort,
       bool? useIdeContext,
       bool? useFlatMode}) async {
+    if (_isDemoMode) {
+      final message = text?.trim();
+      if (type == 'insert_text' &&
+          prompt == true &&
+          execute == true &&
+          message != null &&
+          message.isNotEmpty) {
+        await _simulateDemoPromptReply(message);
+      } else if (message != null && message.isNotEmpty) {
+        await _simulateDemoPromptReply(message, fallbackLabel: type);
+      }
+      return;
+    }
+
     // 연결 상태 재확인
     _checkConnectionState();
 
@@ -2242,6 +2858,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
 
     try {
+      if (_deviceId.isEmpty) {
+        _deviceId = 'mobile-${DateTime.now().millisecondsSinceEpoch}';
+      }
+
       // agentMode가 제공되지 않으면 선택된 모드 사용 (또는 auto)
       final mode = agentMode ?? 'auto';
       // model/reasoning이 제공되지 않으면 현재 선택값 사용
@@ -2279,6 +2899,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final commandData = {
         'type': type,
         'id': DateTime.now().millisecondsSinceEpoch.toString(),
+        'senderDeviceId': _deviceId,
         if (text != null) 'text': text,
         if (command != null) 'command': command,
         if (args != null) 'args': args,
@@ -2380,10 +3001,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       type: MessageType.system));
                   // _isWaitingForResponse는 이미 true, 유지
                 } else if (policyDecision == 'approval_required') {
+                  final needsAssistantResponse =
+                      prompt == true && execute == true;
                   _messages.add(MessageItem(
-                      '⏳ 승인 필요: $approvalId (risk: $riskLevel)',
+                      needsAssistantResponse
+                          ? '⏳ 승인 필요: $approvalId (risk: $riskLevel) · 승인 후 응답을 계속 대기합니다.'
+                          : '⏳ 승인 필요: $approvalId (risk: $riskLevel)',
                       type: MessageType.system));
-                  _isWaitingForResponse = false;
+                  _isWaitingForResponse = needsAssistantResponse;
                 } else if (policyDecision == 'deny') {
                   _messages.add(MessageItem(
                       '🚫 정책 차단: ${responseData?['error'] ?? 'command denied'}',
@@ -2428,6 +3053,72 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         });
       }
     }
+  }
+
+  Future<void> _simulateDemoPromptReply(String userText,
+      {String? fallbackLabel}) async {
+    if (!_isDemoMode || !_isConnected || _isWaitingForResponse) return;
+    final trimmed = userText.trim();
+    if (trimmed.isEmpty) return;
+
+    final detectedMode = _selectedAgentMode == 'auto'
+        ? (_detectAgentMode(trimmed) ?? 'agent')
+        : _selectedAgentMode;
+
+    setState(() {
+      _isWaitingForResponse = true;
+      final promptItem = MessageItem(
+        trimmed,
+        type: MessageType.userPrompt,
+        agentMode: detectedMode,
+      );
+      _lastUserPrompt = promptItem;
+      _messages.add(promptItem);
+      _chatHistory.insert(0, {
+        'sessionId': _currentCodexSessionId ?? _sessionId ?? 'demo-session-id',
+        'userMessage': trimmed,
+        'assistantResponse':
+            _generateDemoResponseForPrompt(trimmed, fallbackLabel),
+        'agentMode': detectedMode,
+      });
+    });
+
+    final responseText = _generateDemoResponseForPrompt(trimmed, fallbackLabel);
+
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    if (!mounted || !_isDemoMode) return;
+
+    setState(() {
+      _isWaitingForResponse = false;
+      _messages.add(MessageItem('', type: MessageType.chatResponseDivider));
+      _messages.add(MessageItem('🤖 Codex Response',
+          type: MessageType.chatResponseHeader));
+      _messages.add(MessageItem(responseText, type: MessageType.chatResponse));
+      _messages.add(MessageItem('', type: MessageType.chatResponseDivider));
+    });
+    _scrollToBottom();
+  }
+
+  String _generateDemoResponseForPrompt(String promptText, [String? fallback]) {
+    final lower = promptText.toLowerCase();
+    if (fallback != null) {
+      return '[$fallback] 데모 모드에서는 실제 서버 전송 없이 샘플 메시지로 응답합니다.';
+    }
+
+    if (lower.contains('심사') || lower.contains('둘러보기')) {
+      return '심사/둘러보기 모드는 실제 네트워크 연결 없이 화면 확인만 가능합니다. 핵심 기능(연결 상태/채팅/승인/세션 탭)을 검토하실 수 있습니다.';
+    }
+    if (lower.contains('세션') || lower.contains('연결')) {
+      return '현재는 리뷰 데모 모드이므로 자동으로 demo-session-id로 세션이 구성되어 있습니다. 릴레이/로컬 연결은 실제 연동이 필요할 때만 수행하세요.';
+    }
+    if (lower.contains('승인') || lower.contains('결정')) {
+      return 'Approvals 탭에서 Pendings를 확인하고 승인/거부 동작을 처리할 수 있습니다. 현재는 샘플 데이터/샘플 흐름을 보여주는 모드입니다.';
+    }
+    if (lower.contains('예시') || lower.contains('기능')) {
+      return '예시 질문: "승인 요청은 어디서 보나요?" 또는 "모바일에서 무엇을 할 수 있나요?" 같은 안내를 통해 앱 흐름을 확인해 보세요.';
+    }
+
+    return '요청하신 내용이 데모 챗으로 들어왔습니다. 현재는 실제 모델이 아닌 샘플 응답이므로 동작 예시를 보여드리기 위한 응답입니다.';
   }
 
   void _scrollToBottom() {
@@ -2755,50 +3446,195 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       );
     }
 
-    // 로그 메시지 스타일
-    if (message.type == MessageType.log) {
-      // 로그 레벨에 따라 색상 결정
-      Color logColor;
-      IconData logIcon;
+    // Codex raw event 메시지 스타일
+    if (message.type == MessageType.codexRawEvent) {
+      final parsed = _parseCodexRawEventText(message.text);
+      final channel = parsed['channel'] ?? 'unknown';
+      final methodWithKind = parsed['method'] ?? 'unknown';
+      final detail = parsed['detail'] ?? '';
+      final methodParts = methodWithKind.split('/');
+      final kind = methodParts.isNotEmpty ? methodParts.last : 'event';
 
-      switch (message.logLevel ?? LogLevel.info) {
-        case LogLevel.error:
-          logColor = Theme.of(context).colorScheme.error;
-          logIcon = Icons.error;
-        case LogLevel.warning:
-          logColor = const Color(0xFFFF9800); // 오렌지
-          logIcon = Icons.warning;
-        case LogLevel.info:
-          logColor = Theme.of(context).colorScheme.tertiary;
-          logIcon = Icons.info;
+      Color kindColor;
+      IconData kindIcon;
+      switch (kind) {
+        case 'reasoning':
+          kindColor = Theme.of(context).colorScheme.primary;
+          kindIcon = Icons.psychology_alt_outlined;
+          break;
+        case 'tool':
+          kindColor = Theme.of(context).colorScheme.tertiary;
+          kindIcon = Icons.build_outlined;
+          break;
+        case 'turn':
+          kindColor = Theme.of(context).colorScheme.secondary;
+          kindIcon = Icons.timelapse;
+          break;
+        case 'plan':
+          kindColor = const Color(0xFF5E7CE2);
+          kindIcon = Icons.checklist_rtl;
+          break;
+        case 'approval':
+          kindColor = const Color(0xFFB56F00);
+          kindIcon = Icons.gpp_maybe_outlined;
+          break;
+        case 'error':
+          kindColor = Theme.of(context).colorScheme.error;
+          kindIcon = Icons.error_outline;
+          break;
+        default:
+          kindColor = Theme.of(context).colorScheme.onSurfaceVariant;
+          kindIcon = Icons.radar_outlined;
       }
 
       return Container(
-        margin: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
-        padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 6.0),
+        margin: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 3.0),
+        padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
         decoration: BoxDecoration(
-          color: logColor.withOpacity(0.1),
+          color: kindColor.withOpacity(0.08),
           borderRadius: BorderRadius.circular(12.0),
-          border: Border.all(color: logColor.withOpacity(0.3), width: 1),
+          border: Border.all(color: kindColor.withOpacity(0.25), width: 1),
         ),
-        child: Row(
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(
-              logIcon,
-              size: 14,
-              color: logColor,
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: SelectableText(
-                message.text,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: logColor.withOpacity(0.9),
-                  fontFamily: 'monospace',
-                  height: 1.4,
+            Row(
+              children: [
+                Icon(kindIcon, size: 14, color: kindColor),
+                const SizedBox(width: 6),
+                Text(
+                  kind.toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: kindColor,
+                  ),
                 ),
+                const SizedBox(width: 6),
+                Text(
+                  '[$channel]',
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  _formatTime(message.timestamp),
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            SelectableText(
+              methodWithKind,
+              style: TextStyle(
+                fontSize: 11,
+                fontFamily: 'monospace',
+                fontWeight: FontWeight.w600,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
+            ),
+            const SizedBox(height: 3),
+            SelectableText(
+              detail,
+              style: TextStyle(
+                fontSize: 11,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontFamily: 'monospace',
+                height: 1.35,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // 로그 메시지 스타일
+    if (message.type == MessageType.log) {
+      final level = message.logLevel ?? LogLevel.info;
+      final sourceLabel = _logSourceLabel(message.logSource ?? 'system');
+      final levelLabel = _logLevelLabel(level);
+      final channel = (message.logChannel ?? '').trim();
+      final isDark = Theme.of(context).brightness == Brightness.dark;
+      final Color logColor = _logLevelColor(level);
+      final IconData logIcon = _logLevelIcon(level);
+
+      return Container(
+        margin: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
+        padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
+        decoration: BoxDecoration(
+          color: logColor.withOpacity(isDark ? 0.16 : 0.10),
+          borderRadius: BorderRadius.circular(12.0),
+          border: Border.all(color: logColor.withOpacity(0.32), width: 1),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  logIcon,
+                  size: 14,
+                  color: logColor,
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: logColor.withOpacity(isDark ? 0.25 : 0.16),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    levelLabel,
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      color: logColor,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  sourceLabel,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                if (channel.isNotEmpty) ...[
+                  const SizedBox(width: 6),
+                  Text(
+                    '[$channel]',
+                    style: TextStyle(
+                      fontSize: 9,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+                const Spacer(),
+                Text(
+                  _formatTime(message.timestamp),
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            SelectableText(
+              message.text,
+              style: TextStyle(
+                fontSize: 11,
+                color: Theme.of(context).colorScheme.onSurface,
+                fontFamily: 'monospace',
+                height: 1.35,
               ),
             ),
           ],
@@ -2910,17 +3746,397 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _selectedHomeTab = widget.initialTab;
     _loadConnectionSettings();
     // 설정에서 기본 프롬프트 옵션 적용
     _selectedAgentMode = 'auto';
-    _selectedModel = _normalizeModel(AppSettings().defaultModel);
+    _selectedModel = _restoreSavedSelectionValue(AppSettings().defaultModel);
     _selectedReasoningEffort =
-        _normalizeReasoningEffort(AppSettings().defaultReasoningEffort);
+        _restoreSavedSelectionValue(AppSettings().defaultReasoningEffort);
     // 설정 변경 리스너 추가
     AppSettings().addListener(_onAppSettingsChanged);
     _scrollController.addListener(_updateScrollButtonVisibility);
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _updateScrollButtonVisibility());
+    unawaited(_initializeNotifications());
+    unawaited(_initializeConnectivityHandling());
+    if (_isDemoMode) {
+      _activateDemoMode();
+      if (widget.initialTab != HomeTab.chat) {
+        unawaited(_selectHomeTab(widget.initialTab));
+      }
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant HomePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!oldWidget.demoMode && widget.demoMode) {
+      _activateDemoMode();
+      if (widget.initialTab != HomeTab.chat) {
+        unawaited(_selectHomeTab(widget.initialTab));
+      }
+    }
+  }
+
+  Future<void> _enterDemoMode() async {
+    if (_isDemoMode) return;
+    if (widget.onEnterDemoMode == null) return;
+
+    await widget.onEnterDemoMode!();
+  }
+
+  Future<void> _exitDemoMode() async {
+    if (!_isDemoMode || widget.onExitDemoMode == null) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('둘러보기 모드 종료'),
+        content: const Text(
+          '심사용 둘러보기 모드를 종료하고 실제 연결 중심 화면으로 이동합니다.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('종료하기'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true || !mounted) return;
+    await widget.onExitDemoMode!();
+  }
+
+  Widget _buildExitDemoModeButton() {
+    if (!_isDemoMode || widget.onExitDemoMode == null) {
+      return const SizedBox.shrink();
+    }
+
+    return IconButton(
+      tooltip: '둘러보기 나가기',
+      icon: const Icon(Icons.logout),
+      onPressed: () {
+        unawaited(_exitDemoMode());
+      },
+    );
+  }
+
+  Widget _buildDemoModeGuideBanner() {
+    if (!_isDemoMode || widget.onExitDemoMode == null) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      child: Card(
+        margin: EdgeInsets.zero,
+        color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.45),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.visibility_outlined,
+                    size: 18,
+                    color: Theme.of(context).colorScheme.onPrimaryContainer,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '앱 둘러보기 모드',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: Theme.of(context).colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '현재 둘러보기 모드입니다. 실제 연결 없이 화면/기능 흐름만 확인할 수 있어요.',
+                style: TextStyle(
+                  fontSize: 11,
+                  height: 1.35,
+                  color: Theme.of(context).colorScheme.onPrimaryContainer,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () {
+                    unawaited(_exitDemoMode());
+                  },
+                  child: const Text('둘러보기 나가기'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _wrapWithDemoModeGuide(Widget child) {
+    if (!_isDemoMode || widget.onExitDemoMode == null) {
+      return child;
+    }
+
+    return Column(
+      children: [
+        _buildDemoModeGuideBanner(),
+        Expanded(child: child),
+      ],
+    );
+  }
+
+  Future<void> _initializeNotifications() async {
+    try {
+      const androidInitializationSettings =
+          AndroidInitializationSettings('@mipmap/ic_launcher');
+      const darwinInitializationSettings = DarwinInitializationSettings(
+        requestAlertPermission: false,
+        requestBadgePermission: false,
+        requestSoundPermission: false,
+      );
+      const initializationSettings = InitializationSettings(
+        android: androidInitializationSettings,
+        iOS: darwinInitializationSettings,
+        macOS: darwinInitializationSettings,
+      );
+
+      await _localNotificationsPlugin.initialize(
+        initializationSettings,
+        onDidReceiveNotificationResponse: (_) {
+          if (!mounted) return;
+          unawaited(_selectHomeTab(HomeTab.approvals));
+        },
+      );
+
+      final androidPlugin =
+          _localNotificationsPlugin.resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
+      await androidPlugin
+          ?.createNotificationChannel(_approvalNotificationChannel);
+      await androidPlugin?.requestNotificationsPermission();
+
+      final iosPlugin =
+          _localNotificationsPlugin.resolvePlatformSpecificImplementation<
+              IOSFlutterLocalNotificationsPlugin>();
+      await iosPlugin?.requestPermissions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+      final macosPlugin =
+          _localNotificationsPlugin.resolvePlatformSpecificImplementation<
+              MacOSFlutterLocalNotificationsPlugin>();
+      await macosPlugin?.requestPermissions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+    } on MissingPluginException {
+      // widget test/web 환경에서는 플러그인이 없을 수 있음
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _messages
+            .add(MessageItem('⚠️ 알림 초기화 실패: $e', type: MessageType.system));
+      });
+    }
+  }
+
+  Future<void> _initializeConnectivityHandling() async {
+    try {
+      final connectivity = Connectivity();
+      final current = await connectivity.checkConnectivity();
+      _handleConnectivityChanged(current, emitSystemMessage: false);
+      _connectivitySubscription =
+          connectivity.onConnectivityChanged.listen(_handleConnectivityChanged);
+    } on MissingPluginException {
+      // widget test/web 환경에서는 플러그인이 없을 수 있음
+    }
+  }
+
+  void _activateDemoMode() {
+    if (!_isDemoMode) return;
+    if (_isConnected && _sessionId == 'demo-session-id') {
+      return;
+    }
+
+    final demoHistory = <Map<String, dynamic>>[
+      {
+        'sessionId': 'demo-codex-session',
+        'userMessage': 'Codex Remote 앱은 어떻게 써요?',
+        'assistantResponse':
+            '세션 ID 입력 없이도 심사 모드로 바로 시연할 수 있어요.\n\n아래 입력창에서 프롬프트를 보내면 데모 응답이 표시됩니다.',
+        'agentMode': 'auto',
+      },
+      {
+        'sessionId': 'demo-codex-session',
+        'userMessage': '승인 요청은 어디서 보나요?',
+        'assistantResponse':
+            'Approvals 탭에서 Codex 요청/릴레이 승인 목록을 확인하고 반응 버튼을 눌러 응답할 수 있어요.',
+        'agentMode': 'agent',
+      },
+    ];
+
+    setState(() {
+      _connectionType = ConnectionType.relay;
+      _isConnected = true;
+      _isWaitingForResponse = false;
+      _isReconnecting = false;
+      _isConnectionActionInProgress = false;
+      _connectionActionLabel = null;
+      _reconnectAttempts = 0;
+      _stopReconnect();
+      _isNetworkReachable = true;
+
+      _sessionId = 'demo-session-id';
+      _deviceId = 'mobile-demo-device';
+      _currentCodexSessionId = 'demo-codex-session';
+      _currentClientId = 'demo-client-id';
+      _lastConnectionError = null;
+      _lastCommandMetaRefreshAt = null;
+
+      _sessionInfo = {
+        'currentSessionId': 'demo-codex-session',
+        'source': 'review-demo',
+      };
+      _chatHistory = List<Map<String, dynamic>>.from(demoHistory);
+      _availableSessions = const ['demo-codex-session'];
+      _pendingCodexServerRequests = [];
+      _pendingCommandApprovals = [];
+      _recentCommandEvents = [];
+      _loadingCommandApprovals = false;
+      _loadingCommandEvents = false;
+      _loadingSessionHistoryForDisplay = false;
+      _loadingPastMessages = false;
+      _seenCodexRequestIds.clear();
+      _seenCommandApprovalIds.clear();
+      _resolvedApprovalEventFallbacks.clear();
+      _autoDecisionTimers.clear();
+      _submittingCodexRequestIds.clear();
+
+      _capabilitiesLoaded = true;
+      _capabilitiesLoading = false;
+      _capabilitiesFromCache = true;
+      _modelCatalogLoadStage = ModelCatalogLoadStage.completed;
+      _capabilitiesFollowupAttempts = 0;
+      _runtimeCapabilitiesRequestedAt = null;
+      _supportsIdeContext = false;
+      _supportsFlatMode = false;
+      _useIdeContext = false;
+      _useFlatMode = false;
+      _availableModels = List<Map<String, dynamic>>.from(_fallbackModels);
+      _selectedModel = 'auto';
+      _selectedReasoningEffort = 'auto';
+
+      _messages.clear();
+      _messages.add(MessageItem(
+        '🔎 심사/둘러보기 모드가 활성화되어 샘플 데이터로 진입했어요.',
+        type: MessageType.system,
+      ));
+      _messages.add(MessageItem(
+        '📡 PC 세션 없이도 Chat/Approvals/Sessions/Settings 화면을 확인할 수 있습니다.',
+        type: MessageType.system,
+      ));
+      _messages.add(MessageItem(
+        '✅ 릴레이 세션: demo-session-id',
+        type: MessageType.system,
+      ));
+      _applyChatHistoryToMessages(demoHistory, replaceConversation: true);
+    });
+
+    _scrollToBottom();
+  }
+
+  void _handleConnectivityChanged(List<ConnectivityResult> results,
+      {bool emitSystemMessage = true}) {
+    final nextReachable =
+        results.any((result) => result != ConnectivityResult.none);
+    final changed = nextReachable != _isNetworkReachable;
+    _isNetworkReachable = nextReachable;
+
+    if (!changed) return;
+    if (mounted && emitSystemMessage) {
+      setState(() {
+        _messages.add(MessageItem(
+            nextReachable
+                ? '📶 네트워크가 복구되었습니다. 승인 목록을 다시 확인합니다.'
+                : '📡 네트워크 연결이 끊겼습니다. 연결 복구 시 자동 갱신됩니다.',
+            type: MessageType.system));
+      });
+    }
+
+    if (!emitSystemMessage) return;
+    if (nextReachable &&
+        _connectionType == ConnectionType.relay &&
+        _isConnected) {
+      unawaited(_loadCommandApprovals(silent: true));
+      unawaited(_loadCommandEvents(silent: true));
+    }
+  }
+
+  Future<void> _maybeNotifyApprovalArrival({
+    int newRelayApprovals = 0,
+    int newCodexRequests = 0,
+  }) async {
+    if (newRelayApprovals <= 0 && newCodexRequests <= 0) return;
+    if (_isAppForeground && _selectedHomeTab == HomeTab.approvals) return;
+
+    final pieces = <String>[];
+    if (newCodexRequests > 0) {
+      pieces.add('Codex $newCodexRequests건');
+    }
+    if (newRelayApprovals > 0) {
+      pieces.add('Relay $newRelayApprovals건');
+    }
+
+    try {
+      _notificationSequence++;
+      const notificationDetails = NotificationDetails(
+        android: AndroidNotificationDetails(
+          'approval_requests',
+          '승인 요청',
+          channelDescription: 'Codex/Relay 승인 요청 알림',
+          importance: Importance.high,
+          priority: Priority.high,
+        ),
+        iOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+        ),
+        macOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+        ),
+      );
+
+      await _localNotificationsPlugin.show(
+        _notificationSequence,
+        '새 승인 요청이 도착했어요',
+        pieces.join(' · '),
+        notificationDetails,
+        payload: 'approvals',
+      );
+    } on MissingPluginException {
+      // 미지원 플랫폼은 무시
+    } catch (_) {
+      // 알림 실패는 치명적이지 않으므로 무시
+    }
   }
 
   void _updateScrollButtonVisibility() {
@@ -2943,29 +4159,85 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       setState(() {
         // 설정 변경 시 UI 업데이트 (히스토리/기본 프롬프트 옵션 등)
         _selectedAgentMode = 'auto';
-        _selectedModel = _normalizeModel(settings.defaultModel);
+        _selectedModel = _restoreSavedSelectionValue(settings.defaultModel);
         _selectedReasoningEffort =
-            _normalizeReasoningEffort(settings.defaultReasoningEffort);
+            _restoreSavedSelectionValue(settings.defaultReasoningEffort);
       });
     }
   }
 
-  // 입력창 클리어 (한글 IME composing 버퍼 완전 초기화)
+  bool _isCommandInputComposing([TextEditingValue? value]) {
+    final current = value ?? _commandController.value;
+    final composing = current.composing;
+    return composing.isValid && !composing.isCollapsed;
+  }
+
   void _clearCommandInput() {
-    // Controller 텍스트 클리어
-    _commandController.clear();
+    _commandController.value = const TextEditingValue(
+      text: '',
+      selection: TextSelection.collapsed(offset: 0),
+      composing: TextRange.empty,
+    );
+    if (!_commandFocusNode.hasFocus) {
+      _commandFocusNode.requestFocus();
+    }
+  }
 
-    // Key를 변경하여 TextField 완전 재생성 (IME 상태 완전 리셋)
-    setState(() {
-      _textFieldKey++;
-    });
+  Future<void> _submitPromptFromInput({required bool newSession}) async {
+    if (!_isConnected || _isWaitingForResponse) return;
 
-    // 새 TextField에 포커스 요청
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        _commandFocusNode.requestFocus();
+    final now = DateTime.now();
+    if (_lastPromptSubmitTime != null &&
+        now.difference(_lastPromptSubmitTime!).inMilliseconds < 400) {
+      return;
+    }
+
+    // 1차 체크: 한글 IME 조합 중이면 commit을 한 프레임 기다린다.
+    if (_isCommandInputComposing()) {
+      await Future<void>.delayed(Duration.zero);
+      if (_isCommandInputComposing()) {
+        return;
       }
-    });
+    }
+
+    final text = _commandController.text.trim();
+    if (text.isEmpty) return;
+
+    _lastPromptSubmitTime = now;
+    _sendCommand('insert_text',
+        text: text,
+        prompt: true,
+        execute: true,
+        newSession: newSession,
+        agentMode: _selectedAgentMode);
+    _clearCommandInput();
+  }
+
+  KeyEventResult _handlePromptInputKeyEvent(FocusNode node, KeyEvent event) {
+    if (!_commandFocusNode.hasFocus ||
+        !_isConnected ||
+        _isWaitingForResponse ||
+        event.logicalKey != LogicalKeyboardKey.enter) {
+      return KeyEventResult.ignored;
+    }
+
+    // Shift+Enter는 줄바꿈
+    if (HardwareKeyboard.instance.isShiftPressed) {
+      return KeyEventResult.ignored;
+    }
+
+    // 조합 중 Enter는 IME commit 동작을 우선
+    if (_isCommandInputComposing()) {
+      return KeyEventResult.ignored;
+    }
+
+    if (event is! KeyUpEvent) {
+      // KeyDown/Repeat 단계에서 먼저 consume해서 newline 삽입을 막는다.
+      return KeyEventResult.handled;
+    }
+
+    unawaited(_submitPromptFromInput(newSession: false));
+    return KeyEventResult.handled;
   }
 
   // 연결 설정 로드 (SharedPreferences)
@@ -3032,6 +4304,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
+      _isAppForeground = true;
       // 앱이 다시 활성화되었을 때 연결 상태 확인 및 UI 갱신
       if (mounted) {
         // 연결 상태 확인
@@ -3045,13 +4318,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           }
         });
       }
+      if (_connectionType == ConnectionType.relay && _isConnected) {
+        unawaited(_loadCommandApprovals(silent: true));
+        unawaited(_loadCommandEvents(silent: true));
+      }
     } else if (state == AppLifecycleState.paused) {
-      // 앱이 백그라운드로 갔을 때는 특별한 처리가 필요 없음
+      _isAppForeground = false;
+    } else if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      _isAppForeground = false;
     }
   }
 
   // 세션 정보 조회
   Future<void> _loadSessionInfo() async {
+    if (_isDemoMode) return;
     if (!_isConnected) return;
 
     // clientId가 아직 없으면 잠시 대기 후 재시도
@@ -3072,6 +4354,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   // 대화 히스토리 조회
   // 릴레이 모드일 때 relaySessionId를 넘기면 현재 릴레이 세션의 히스토리만 반환됨
   Future<void> _loadChatHistory({String? sessionId, int limit = 50}) async {
+    if (_isDemoMode) return;
     if (!_isConnected) return;
 
     try {
@@ -3086,25 +4369,43 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _loadRuntimeCapabilities() async {
+    if (_isDemoMode) return;
     if (!_isConnected) return;
 
     try {
+      final cached = await AppSettings().getRuntimeCapabilitiesCache(
+        maxAge: const Duration(hours: 24),
+      );
+      _cancelCapabilitiesSequenceTimers();
       setState(() {
         _capabilitiesLoading = true;
-        _messages.add(MessageItem(
-            '🛰️ Requesting runtime capabilities from extension...',
-            type: MessageType.system));
-      });
-      _capabilitiesLoadTimer?.cancel();
-      _capabilitiesLoadTimer = Timer(const Duration(seconds: 4), () {
-        if (!mounted || !_capabilitiesLoading || _capabilitiesLoaded) return;
-        setState(() {
-          _capabilitiesLoading = false;
+        _capabilitiesFollowupAttempts = 0;
+        _runtimeCapabilitiesRequestedAt = DateTime.now();
+        if (cached != null) {
+          _applyRuntimeCapabilities(cached.capabilities);
+          _capabilitiesLoaded = true;
+          _capabilitiesFromCache = true;
+          _modelCatalogLoadStage = ModelCatalogLoadStage.syncingAll;
+          final ageMinutes =
+              DateTime.now().difference(cached.cachedAt).inMinutes;
           _messages.add(MessageItem(
-              '⚠️ Capability load delayed. Falling back to cached/default UI.',
+              '📦 캐시된 모델 ${_availableModels.length}개 적용 '
+              '(약 ${ageMinutes}분 전)',
               type: MessageType.system));
-        });
+          _messages.add(
+              MessageItem('🔄 최신 모델 목록을 동기화하는 중...', type: MessageType.system));
+        } else {
+          _capabilitiesLoaded = false;
+          _capabilitiesFromCache = false;
+          _modelCatalogLoadStage = ModelCatalogLoadStage.loading;
+          _messages.add(
+              MessageItem('🛰️ 모델 목록을 불러오는 중...', type: MessageType.system));
+        }
       });
+      if (cached == null) {
+        _startCapabilitiesLoadSequence();
+      }
+      _armCapabilitiesLoadTimeout();
       await _sendCommand('get_runtime_capabilities',
           clientId: _currentClientId);
       if (_connectionType == ConnectionType.relay) {
@@ -3113,12 +4414,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         });
       }
     } catch (e) {
-      // 에러는 조용히 무시
+      if (!mounted) return;
+      setState(() {
+        _cancelCapabilitiesSequenceTimers();
+        _capabilitiesLoading = false;
+        _modelCatalogLoadStage = ModelCatalogLoadStage.failed;
+        _runtimeCapabilitiesRequestedAt = null;
+        _messages
+            .add(MessageItem('❌ 모델 목록 로딩 실패: $e', type: MessageType.system));
+      });
     }
   }
 
   Future<void> _refreshCommandMetaIfStale(
       {Duration minInterval = const Duration(seconds: 6)}) async {
+    if (_isDemoMode) return;
     if (!_isConnected || _connectionType != ConnectionType.relay) return;
     final now = DateTime.now();
     if (_lastCommandMetaRefreshAt != null &&
@@ -3131,8 +4441,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _loadCommandApprovals({bool silent = false}) async {
+    if (_isDemoMode) return;
     if (!_isConnected || _sessionId == null) return;
     if (_connectionType != ConnectionType.relay) return;
+    if (!_isNetworkReachable) {
+      if (!silent && mounted) {
+        setState(() {
+          _messages.add(MessageItem('📡 오프라인 상태에서는 승인 목록을 불러올 수 없어요.',
+              type: MessageType.system));
+        });
+        _scrollToBottom();
+      }
+      return;
+    }
     if (_loadingCommandApprovals) return;
 
     if (mounted) {
@@ -3154,9 +4475,29 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         final approvals = List<Map<String, dynamic>>.from(
             (data['approvals'] as List? ?? [])
                 .map((e) => Map<String, dynamic>.from(e as Map)));
+        var newRelayApprovals = 0;
 
         setState(() {
           _pendingCommandApprovals = approvals;
+          for (final approval in approvals) {
+            final approvalId = approval['approval_id']?.toString() ?? '';
+            if (approvalId.isEmpty ||
+                _seenCommandApprovalIds.contains(approvalId)) {
+              continue;
+            }
+
+            _seenCommandApprovalIds.add(approvalId);
+            newRelayApprovals++;
+            final policy = approval['policy'] as Map<String, dynamic>? ?? {};
+            final riskLevel = policy['risk_level']?.toString() ?? 'unknown';
+            final commandRaw = _truncateForLog(_approvalCommandRaw(approval));
+            final requestType = _approvalRequestTypeLabel(approval);
+            final requestedBy = _approvalRequestedBy(approval);
+
+            _messages.add(MessageItem(
+                '🔐 승인 요청 도착: $requestType · $commandRaw · by $requestedBy (risk: $riskLevel)',
+                type: MessageType.system));
+          }
           _loadingCommandApprovals = false;
         });
 
@@ -3168,6 +4509,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           });
           _scrollToBottom();
         }
+        unawaited(_maybeNotifyApprovalArrival(
+          newRelayApprovals: newRelayApprovals,
+        ));
       } else {
         setState(() => _loadingCommandApprovals = false);
         if (!silent) {
@@ -3192,9 +4536,1064 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  LogLevel _parseLogLevel(dynamic rawLevel) {
+    switch (rawLevel?.toString().toLowerCase()) {
+      case 'error':
+        return LogLevel.error;
+      case 'warn':
+      case 'warning':
+        return LogLevel.warning;
+      default:
+        return LogLevel.info;
+    }
+  }
+
+  String _normalizeLogSource(dynamic rawSource) {
+    final source = rawSource?.toString().trim().toLowerCase() ?? '';
+    if (source.isEmpty) return 'system';
+    if (source == 'codex') return 'codex';
+    if (source == 'extension') return 'extension';
+    if (source == 'relay') return 'relay';
+    return source;
+  }
+
+  String _prettifyLogBody(String rawMessage) {
+    var text = rawMessage.trim();
+    if (text.isEmpty) return '(empty)';
+
+    text = text.replaceFirst(RegExp(r'^\[(CODEX|Relay|Extension)\]\s*'), '');
+
+    final ignoredRpcMatch = RegExp(
+            r'ignored rpc notification method=([^,]+), params=(.+)$',
+            caseSensitive: false)
+        .firstMatch(text);
+    if (ignoredRpcMatch != null) {
+      final method = ignoredRpcMatch.group(1)?.trim() ?? 'unknown';
+      final params = ignoredRpcMatch.group(2)?.trim() ?? '';
+      return 'Ignored RPC: $method\nparams: ${_truncateForLog(params, maxLength: 180)}';
+    }
+
+    return text;
+  }
+
+  void _appendPrettyLogMessage(dynamic payload, {required String channel}) {
+    final map = payload is Map
+        ? Map<String, dynamic>.from(payload)
+        : <String, dynamic>{};
+    final level = _parseLogLevel(map['level']);
+    final source = _normalizeLogSource(map['source']);
+    final body = _prettifyLogBody(map['message']?.toString() ?? '');
+    final errorText = map['error']?.toString().trim() ?? '';
+    final composed = errorText.isNotEmpty ? '$body\nerror: $errorText' : body;
+
+    _messages.add(MessageItem(composed,
+        type: MessageType.log,
+        logLevel: level,
+        logSource: source,
+        logChannel: channel));
+  }
+
+  String _logSourceLabel(String source) {
+    switch (source) {
+      case 'codex':
+        return 'Codex';
+      case 'extension':
+        return 'Extension';
+      case 'relay':
+        return 'Relay';
+      case 'system':
+        return 'System';
+      default:
+        return source;
+    }
+  }
+
+  String _logLevelLabel(LogLevel level) {
+    switch (level) {
+      case LogLevel.error:
+        return 'ERROR';
+      case LogLevel.warning:
+        return 'WARN';
+      case LogLevel.info:
+        return 'INFO';
+    }
+  }
+
+  Color _logLevelColor(LogLevel level) {
+    switch (level) {
+      case LogLevel.error:
+        return Theme.of(context).colorScheme.error;
+      case LogLevel.warning:
+        return const Color(0xFFEF8B00);
+      case LogLevel.info:
+        return Theme.of(context).colorScheme.tertiary;
+    }
+  }
+
+  IconData _logLevelIcon(LogLevel level) {
+    switch (level) {
+      case LogLevel.error:
+        return Icons.error_outline;
+      case LogLevel.warning:
+        return Icons.warning_amber_rounded;
+      case LogLevel.info:
+        return Icons.info_outline;
+    }
+  }
+
+  String _truncateForLog(String value, {int maxLength = 72}) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return '';
+    if (trimmed.length <= maxLength) return trimmed;
+    return '${trimmed.substring(0, maxLength)}…';
+  }
+
+  String _safeJsonSnippet(dynamic payload, {int maxLength = 240}) {
+    try {
+      final encoded = jsonEncode(payload);
+      return _truncateForLog(encoded, maxLength: maxLength);
+    } catch (_) {
+      return _truncateForLog(payload?.toString() ?? '(empty)',
+          maxLength: maxLength);
+    }
+  }
+
+  Widget _approvalMetaChip({
+    required String label,
+    required String value,
+    Color? valueColor,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: RichText(
+        text: TextSpan(
+          style: TextStyle(
+            fontSize: 11,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+          children: [
+            TextSpan(text: '$label: '),
+            TextSpan(
+              text: value,
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                color: valueColor ?? Theme.of(context).colorScheme.onSurface,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _codexEventKind(String method) {
+    final normalized = method.toLowerCase();
+    if (normalized.contains('plan/')) return 'plan';
+    if (normalized.contains('approval')) return 'approval';
+    if (normalized.contains('agent_message_content_delta') ||
+        normalized.contains('agentmessage') ||
+        normalized.contains('reasoning')) {
+      return 'reasoning';
+    }
+    if (normalized.contains('tool/')) return 'tool';
+    if (normalized.contains('turn/')) return 'turn';
+    if (normalized.contains('error')) return 'error';
+    return 'event';
+  }
+
+  String _statusBadge(String rawStatus) {
+    final status = rawStatus.toLowerCase();
+    if (status == 'completed' || status == 'done') return '✅';
+    if (status == 'inprogress' || status == 'in_progress') return '⏳';
+    if (status == 'pending' || status == 'todo') return '🕓';
+    if (status == 'failed' || status == 'error') return '❌';
+    return '•';
+  }
+
+  String _formatPlanUpdateDetail(dynamic params) {
+    final map =
+        params is Map ? Map<String, dynamic>.from(params) : <String, dynamic>{};
+    final explanation = map['explanation']?.toString().trim() ?? '';
+    final rawPlan = map['plan'] as List? ?? const [];
+    final steps = rawPlan
+        .map((item) => item is Map ? Map<String, dynamic>.from(item) : null)
+        .whereType<Map<String, dynamic>>()
+        .toList();
+
+    final parts = <String>[];
+    if (explanation.isNotEmpty) {
+      parts.add(_truncateForLog(explanation, maxLength: 160));
+    }
+    if (steps.isNotEmpty) {
+      final formattedSteps = steps
+          .map((step) {
+            final status = step['status']?.toString() ?? 'pending';
+            final title = step['step']?.toString().trim() ?? '(untitled)';
+            return '${_statusBadge(status)} ${_truncateForLog(title, maxLength: 82)}';
+          })
+          .take(3)
+          .toList();
+      parts.add(formattedSteps.join(' | '));
+      if (steps.length > 3) {
+        parts.add('… +${steps.length - 3} more step(s)');
+      }
+    }
+
+    if (parts.isEmpty) {
+      return _safeJsonSnippet(params, maxLength: 220);
+    }
+    return parts.join('\n');
+  }
+
+  Map<String, String> _parseCodexRawEventText(String text) {
+    final regex = RegExp(r'^📡 \[(.+?)\] (.+?) :: ([\s\S]+)$');
+    final match = regex.firstMatch(text.trim());
+    if (match == null) {
+      return {
+        'channel': 'unknown',
+        'method': 'unknown',
+        'detail': text,
+      };
+    }
+    return {
+      'channel': match.group(1) ?? 'unknown',
+      'method': match.group(2) ?? 'unknown',
+      'detail': match.group(3) ?? '',
+    };
+  }
+
+  String _extractCodexEventText(dynamic value, {int depth = 0}) {
+    if (value == null || depth > 4) return '';
+
+    if (value is String) {
+      final trimmed = value.trim();
+      if (trimmed.isEmpty) return '';
+      return trimmed;
+    }
+
+    if (value is Map) {
+      const preferredKeys = [
+        'delta',
+        'text',
+        'message',
+        'content',
+        'reasoning',
+        'summary'
+      ];
+      for (final key in preferredKeys) {
+        final extracted = _extractCodexEventText(value[key], depth: depth + 1);
+        if (extracted.isNotEmpty) return extracted;
+      }
+      for (final entry in value.entries) {
+        final extracted = _extractCodexEventText(entry.value, depth: depth + 1);
+        if (extracted.isNotEmpty) return extracted;
+      }
+      return '';
+    }
+
+    if (value is List) {
+      for (final item in value) {
+        final extracted = _extractCodexEventText(item, depth: depth + 1);
+        if (extracted.isNotEmpty) return extracted;
+      }
+      return '';
+    }
+
+    return '';
+  }
+
+  String _formatCodexEventDetail(String method, dynamic params) {
+    final normalized = method.toLowerCase();
+    if (normalized.contains('turn/plan/updated')) {
+      return _formatPlanUpdateDetail(params);
+    }
+    if (normalized.contains('agent_message_content_delta')) {
+      final text = _extractCodexEventText(params);
+      if (text.isNotEmpty) {
+        return 'Δ ${_truncateForLog(text, maxLength: 180)}';
+      }
+    }
+
+    final text = _extractCodexEventText(params);
+    return text.isNotEmpty
+        ? _truncateForLog(text, maxLength: 220)
+        : _safeJsonSnippet(params, maxLength: 220);
+  }
+
+  void _recordCodexRawNotification(dynamic payload, {required String channel}) {
+    final map = payload is Map
+        ? Map<String, dynamic>.from(payload)
+        : <String, dynamic>{};
+    final method = map['method']?.toString().trim() ??
+        map['eventMethod']?.toString().trim() ??
+        'unknown';
+    final params = map['params'] ?? map['eventParams'] ?? payload;
+    final kind = _codexEventKind(method);
+    final detail = _formatCodexEventDetail(method, params);
+
+    _messages.add(MessageItem('📡 [$channel] $method/$kind :: $detail',
+        type: MessageType.codexRawEvent, logLevel: LogLevel.info));
+  }
+
+  void _recordUnhandledIncomingMessage(
+      String type, dynamic payload, String channel) {
+    final detail = _safeJsonSnippet(payload, maxLength: 220);
+    _messages.add(MessageItem('🧩 [$channel] unhandled type=$type → $detail',
+        type: MessageType.codexRawEvent, logLevel: LogLevel.warning));
+  }
+
+  String _approvalCommandRaw(Map<String, dynamic> approval) {
+    final commandData = _approvalCommandData(approval);
+    return commandData['command']?.toString() ??
+        commandData['raw']?.toString() ??
+        '(unknown)';
+  }
+
+  Map<String, dynamic> _approvalCommandData(Map<String, dynamic> approval) {
+    final commandMessage =
+        approval['command_message'] as Map<String, dynamic>? ?? {};
+    return commandMessage['data'] as Map<String, dynamic>? ?? {};
+  }
+
+  String _approvalRequestTypeLabel(Map<String, dynamic> approval) {
+    final commandMessage =
+        approval['command_message'] as Map<String, dynamic>? ?? {};
+    final type = commandMessage['type']?.toString().toLowerCase() ?? '';
+    switch (type) {
+      case 'command':
+        return 'Command execution';
+      case 'chat':
+        return 'Chat request';
+      case 'prompt':
+        return 'Prompt request';
+      default:
+        return type.isEmpty ? 'Approval request' : type;
+    }
+  }
+
+  String _approvalRequestedBy(Map<String, dynamic> approval) {
+    final commandMessage =
+        approval['command_message'] as Map<String, dynamic>? ?? {};
+    final sender = commandMessage['senderDeviceId']?.toString().trim() ?? '';
+    final requestedBy = approval['requested_by']?.toString().trim() ?? '';
+    return sender.isNotEmpty
+        ? sender
+        : (requestedBy.isNotEmpty ? requestedBy : '(unknown)');
+  }
+
+  String _approvalWorkingDirectory(Map<String, dynamic> approval) {
+    final commandData = _approvalCommandData(approval);
+    return commandData['cwd']?.toString().trim() ?? '';
+  }
+
+  String _approvalPolicyRule(Map<String, dynamic> approval) {
+    final policy = approval['policy'] as Map<String, dynamic>? ?? {};
+    return policy['rule_id']?.toString().trim() ?? '';
+  }
+
+  bool _approvalNeedsAssistantResponse(Map<String, dynamic> approval) {
+    final commandData = _approvalCommandData(approval);
+    final isPrompt = commandData['prompt'] == true;
+    final shouldExecute = commandData['execute'] == true;
+    return isPrompt && shouldExecute;
+  }
+
+  String _approvalHistoryStatusKey(String? approvalId, String status) {
+    final normalizedId = approvalId?.trim() ?? '';
+    if (normalizedId.isEmpty) return '';
+    return '${normalizedId}_${status.toLowerCase()}';
+  }
+
+  String _normalizeApprovalStatusFromEvent(Map<String, dynamic> event) {
+    final approval = event['approval'] as Map<String, dynamic>? ?? {};
+    final rawStatus = approval['status']?.toString().toLowerCase().trim() ?? '';
+    switch (rawStatus) {
+      case 'accept':
+      case 'accepted':
+      case 'approve':
+      case 'approved':
+        return 'approved';
+      case 'deny':
+      case 'denied':
+      case 'reject':
+      case 'rejected':
+        return 'rejected';
+      default:
+        return rawStatus;
+    }
+  }
+
+  String? _deriveApprovalStatusFromEvent(Map<String, dynamic> event) {
+    final approval = event['approval'] as Map<String, dynamic>? ?? {};
+    final metadata = event['metadata'] as Map<String, dynamic>? ?? {};
+    final result = event['result'] as Map<String, dynamic>? ?? {};
+
+    final normalizedStatus = _normalizeApprovalStatusFromEvent(event);
+    if (normalizedStatus == 'approved' || normalizedStatus == 'rejected') {
+      return normalizedStatus;
+    }
+
+    final approvalRequired = approval['required'] == true ||
+        _extractApprovalIdFromCommandEvent(event) != null;
+    if (!approvalRequired) return null;
+
+    final rawAction = metadata['action']?.toString().toLowerCase().trim() ?? '';
+    if (rawAction == 'approve' || rawAction == 'approved') return 'approved';
+    if (rawAction == 'reject' || rawAction == 'rejected') return 'rejected';
+
+    final resultStatus =
+        result['status']?.toString().toLowerCase().trim() ?? '';
+    switch (resultStatus) {
+      case 'success':
+      case 'error':
+      case 'timeout':
+        return 'approved';
+      case 'cancelled':
+        return 'rejected';
+      default:
+        break;
+    }
+
+    final approvedBy = approval['approved_by']?.toString().trim() ?? '';
+    if (approvedBy.isNotEmpty) return 'approved';
+
+    return null;
+  }
+
+  void _upsertResolvedApprovalEventFallback(
+    Map<String, dynamic> approval, {
+    required String status,
+  }) {
+    final approvalId = approval['approval_id']?.toString() ?? '';
+    final normalizedApprovalId = approvalId.trim();
+    if (normalizedApprovalId.isEmpty) return;
+
+    final key = _approvalHistoryStatusKey(normalizedApprovalId, status);
+    if (key.isEmpty) return;
+    final policy = approval['policy'] as Map<String, dynamic>? ?? {};
+    final reasons = List<String>.from((policy['reasons'] as List? ?? []));
+
+    final commandData = _approvalCommandData(approval);
+
+    final fallback = {
+      'event_id': 'mobile-fallback-${DateTime.now().millisecondsSinceEpoch}',
+      'session_id': _sessionId ?? '',
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+      'tool': {
+        'provider': 'codex',
+        'name': 'mobile-approval-fallback',
+      },
+      'command': {
+        'raw': commandData['command']?.toString() ??
+            commandData['raw']?.toString() ??
+            '-',
+        'cwd': commandData['cwd']?.toString(),
+      },
+      'risk': {
+        'level': policy['risk_level']?.toString() ?? 'unknown',
+        'reasons': reasons,
+      },
+      'policy': {
+        'decision': 'approval_required',
+        'rule_id': policy['rule_id']?.toString() ?? 'approval_required',
+      },
+      'approval': {
+        'required': true,
+        'status': status,
+        'approved_by': status == 'approved' ? _deviceId : null,
+        'approved_at':
+            status == 'approved' ? DateTime.now().millisecondsSinceEpoch : null,
+        'reason': 'resolved via mobile app',
+      },
+      'result': {
+        'status': status == 'approved' ? 'pending' : 'cancelled',
+        'exit_code': null,
+        'duration_ms': 0,
+        'error_message': status == 'approved' ? null : 'Rejected by approver',
+      },
+      'metadata': {
+        'approval_id': approvalId,
+        'action': status,
+        'resolved_by': _deviceId,
+        'resolved_at': DateTime.now().millisecondsSinceEpoch,
+      },
+    };
+
+    _resolvedApprovalEventFallbacks[key] = Map<String, dynamic>.from(fallback);
+  }
+
+  List<Map<String, dynamic>> _buildResolvedApprovalHistoryEntries(
+      {int limit = 20}) {
+    final entries = <Map<String, dynamic>>[];
+    final seen = <String>{};
+
+    for (final event in _recentCommandEvents) {
+      final approval = event['approval'] as Map<String, dynamic>? ?? {};
+      final status = _deriveApprovalStatusFromEvent(event) ?? '';
+      if (status != 'approved' && status != 'rejected') continue;
+
+      final approvalId = _extractApprovalIdFromCommandEvent(event) ?? '';
+      final dedupeKey = '${approvalId}_$status';
+      if (approvalId.isNotEmpty && seen.contains(dedupeKey)) continue;
+      if (approvalId.isNotEmpty) seen.add(dedupeKey);
+
+      final command = event['command'] as Map<String, dynamic>? ?? {};
+      final risk = event['risk'] as Map<String, dynamic>? ?? {};
+      final commandRaw = _truncateForLog(
+          command['raw']?.toString() ?? '(unknown)',
+          maxLength: 88);
+      final riskLevel = risk['level']?.toString() ?? 'unknown';
+      final resolvedBy = approval['approved_by']?.toString().trim();
+      final byLabel = (resolvedBy != null && resolvedBy.isNotEmpty)
+          ? resolvedBy
+          : (event['metadata'] as Map<String, dynamic>? ?? {})['resolved_by']
+                  ?.toString()
+                  .trim() ??
+              '-';
+      final timeLabel = _timestampLabelFromMap(event, preferredKeys: const [
+        'resolved_at',
+        'resolvedAt',
+        'timestamp',
+        'created_at',
+        'createdAt'
+      ]);
+
+      entries.add({
+        'status': status,
+        'title': status == 'approved' ? '허용됨' : '거부됨',
+        'command': commandRaw,
+        'riskLevel': riskLevel,
+        'approvalId': approvalId,
+        'resolvedBy': byLabel,
+        'timeLabel': timeLabel,
+      });
+      if (entries.length >= limit) break;
+    }
+
+    return entries;
+  }
+
+  String _describeDecisionPayload(Map<String, dynamic> responsePayload) {
+    const candidateKeys = ['decision', 'action', 'status', 'choice', 'result'];
+    for (final key in candidateKeys) {
+      final value = responsePayload[key]?.toString().trim() ?? '';
+      if (value.isNotEmpty) return value;
+    }
+
+    if (responsePayload.containsKey('answers')) {
+      return 'answers_submitted';
+    }
+
+    if (responsePayload.isEmpty) return 'submitted';
+    return _truncateForLog(jsonEncode(responsePayload), maxLength: 56);
+  }
+
+  String _autoDecisionModeLabel(AutoDecisionMode mode) {
+    switch (mode) {
+      case AutoDecisionMode.approve:
+        return 'auto-approve';
+      case AutoDecisionMode.reject:
+        return 'auto-reject';
+      case AutoDecisionMode.off:
+        return 'manual';
+    }
+  }
+
+  void _cancelAutoDecisionTimer(String requestId) {
+    final timer = _autoDecisionTimers.remove(requestId);
+    timer?.cancel();
+  }
+
+  void _cancelAllAutoDecisionTimers() {
+    for (final timer in _autoDecisionTimers.values) {
+      timer.cancel();
+    }
+    _autoDecisionTimers.clear();
+  }
+
+  DateTime? _parseTimestampValue(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is int) {
+      return DateTime.fromMillisecondsSinceEpoch(raw);
+    }
+    if (raw is String) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) return null;
+      final asInt = int.tryParse(trimmed);
+      if (asInt != null) {
+        return DateTime.fromMillisecondsSinceEpoch(asInt);
+      }
+      return DateTime.tryParse(trimmed);
+    }
+    return null;
+  }
+
+  String _timestampLabelFromMap(Map<String, dynamic> payload,
+      {List<String> preferredKeys = const [
+        'created_at',
+        'createdAt',
+        'timestamp',
+        'resolved_at',
+        'resolvedAt'
+      ]}) {
+    for (final key in preferredKeys) {
+      final parsed = _parseTimestampValue(payload[key]);
+      if (parsed != null) return _formatTime(parsed);
+    }
+    return '-';
+  }
+
+  Map<String, dynamic>? _pickAutoDecisionPayload(Map<String, dynamic> request) {
+    final choices = List<Map<String, dynamic>>.from(
+        (request['choices'] as List? ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map)));
+    if (choices.isEmpty) return null;
+
+    final wantsApprove = _autoDecisionMode == AutoDecisionMode.approve;
+    final positiveKeywords = <String>[
+      'approve',
+      'allow',
+      'accept',
+      'continue',
+      'proceed',
+      'yes'
+    ];
+    final negativeKeywords = <String>[
+      'reject',
+      'deny',
+      'block',
+      'cancel',
+      'decline',
+      'no'
+    ];
+
+    bool matches(Map<String, dynamic> choice, List<String> keywords) {
+      final label = choice['label']?.toString().toLowerCase() ?? '';
+      final style = choice['style']?.toString().toLowerCase() ?? '';
+      final response =
+          Map<String, dynamic>.from(choice['response'] as Map? ?? {});
+      final responseText = [
+        response['decision'],
+        response['action'],
+        response['status'],
+        response['result']
+      ].where((e) => e != null).join(' ').toLowerCase();
+      final haystack = '$label $style $responseText';
+      return keywords.any((kw) => haystack.contains(kw));
+    }
+
+    final exact = choices.where((choice) {
+      if (wantsApprove) return matches(choice, positiveKeywords);
+      return matches(choice, negativeKeywords);
+    }).toList();
+    if (exact.isNotEmpty) {
+      return Map<String, dynamic>.from(exact.first['response'] as Map? ?? {});
+    }
+
+    if (wantsApprove) {
+      final primary = choices.firstWhere(
+          (choice) => choice['style']?.toString().toLowerCase() == 'primary',
+          orElse: () => choices.first);
+      return Map<String, dynamic>.from(primary['response'] as Map? ?? {});
+    }
+
+    final danger = choices.firstWhere(
+        (choice) => choice['style']?.toString().toLowerCase() == 'danger',
+        orElse: () => choices.last);
+    return Map<String, dynamic>.from(danger['response'] as Map? ?? {});
+  }
+
+  void _scheduleAutoDecisionForCodexRequest(Map<String, dynamic> request) {
+    if (_autoDecisionMode == AutoDecisionMode.off) return;
+
+    final requestId = request['requestId']?.toString() ?? '';
+    if (requestId.isEmpty) return;
+
+    final requestKind = request['requestKind']?.toString() ?? '';
+    if (requestKind == 'user_input') return;
+
+    _cancelAutoDecisionTimer(requestId);
+    _autoDecisionTimers[requestId] =
+        Timer(Duration(seconds: _autoDecisionTimeoutSec), () async {
+      if (!mounted) return;
+
+      final stillPending = _pendingCodexServerRequests
+          .any((item) => item['requestId']?.toString() == requestId);
+      if (!stillPending) {
+        _cancelAutoDecisionTimer(requestId);
+        return;
+      }
+
+      final autoPayload = _pickAutoDecisionPayload(request);
+      final modeLabel = _autoDecisionModeLabel(_autoDecisionMode);
+      if (autoPayload == null) {
+        setState(() {
+          _messages.add(MessageItem('⚠️ $requestId 자동 응답 실패: 선택 가능한 응답이 없습니다.',
+              type: MessageType.system));
+        });
+        _scrollToBottom();
+        _cancelAutoDecisionTimer(requestId);
+        return;
+      }
+
+      setState(() {
+        _messages.add(MessageItem(
+            '⏱️ ${_autoDecisionTimeoutSec}초 무응답 → $modeLabel 실행',
+            type: MessageType.system));
+      });
+      _scrollToBottom();
+      _cancelAutoDecisionTimer(requestId);
+      await _submitCodexDecision(request, autoPayload);
+    });
+  }
+
+  Future<void> _confirmAndResolveApproval(
+      Map<String, dynamic> approval, String action) async {
+    final approvalId = approval['approval_id']?.toString() ?? '';
+    if (approvalId.isEmpty) return;
+
+    final policy = approval['policy'] as Map<String, dynamic>? ?? {};
+    final riskLevel =
+        policy['risk_level']?.toString().toLowerCase().trim() ?? 'unknown';
+    final commandRaw = _approvalCommandRaw(approval);
+    final requestType = _approvalRequestTypeLabel(approval);
+    final requestedBy = _approvalRequestedBy(approval);
+    final cwd = _approvalWorkingDirectory(approval);
+    final isHighRisk = riskLevel == 'high' || riskLevel == 'critical';
+    final reasons = List<String>.from(
+        (policy['reasons'] as List? ?? []).map((e) => e.toString()));
+    final actionLabel = action == 'approve' ? '허용' : '거부';
+
+    if (!mounted) return;
+    final confirmed = await showModalBottomSheet<bool>(
+          context: context,
+          isScrollControlled: true,
+          showDragHandle: true,
+          builder: (sheetContext) {
+            final scheme = Theme.of(sheetContext).colorScheme;
+            final accentColor = action == 'approve'
+                ? scheme.primary
+                : Theme.of(sheetContext).colorScheme.error;
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '$actionLabel 하시겠어요?',
+                        style: Theme.of(sheetContext)
+                            .textTheme
+                            .titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w800),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        '승인 대상 명령을 확인한 뒤 결정해 주세요.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _approvalMetaChip(
+                            label: 'Risk',
+                            value: riskLevel,
+                            valueColor: _riskColor(riskLevel),
+                          ),
+                          _approvalMetaChip(label: 'Type', value: requestType),
+                          _approvalMetaChip(label: 'By', value: requestedBy),
+                          if (cwd.isNotEmpty)
+                            _approvalMetaChip(label: 'CWD', value: cwd),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: scheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: scheme.outlineVariant),
+                        ),
+                        child: SelectableText(
+                          _truncateForLog(commandRaw, maxLength: 480),
+                          style: TextStyle(
+                            fontSize: 13,
+                            height: 1.4,
+                            fontFamily: 'monospace',
+                            color: scheme.onSurface,
+                          ),
+                        ),
+                      ),
+                      if (reasons.isNotEmpty) ...[
+                        const SizedBox(height: 10),
+                        ...reasons.map((reason) => Padding(
+                              padding: const EdgeInsets.only(bottom: 4),
+                              child: Text(
+                                '• $reason',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ),
+                            )),
+                      ],
+                      if (action == 'approve' && isHighRisk) ...[
+                        const SizedBox(height: 10),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Theme.of(sheetContext)
+                                .colorScheme
+                                .errorContainer,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            '고위험 명령입니다. 신뢰 가능한 요청인지 다시 확인하세요.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: Theme.of(sheetContext)
+                                  .colorScheme
+                                  .onErrorContainer,
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () =>
+                                  Navigator.of(sheetContext).pop(false),
+                              child: const Text('취소'),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: FilledButton(
+                              style: FilledButton.styleFrom(
+                                backgroundColor: accentColor,
+                              ),
+                              onPressed: () =>
+                                  Navigator.of(sheetContext).pop(true),
+                              child: Text(actionLabel),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        ) ??
+        false;
+
+    if (!confirmed) {
+      setState(() {
+        _messages.add(MessageItem('🕒 승인 결정을 취소했어요: $approvalId',
+            type: MessageType.system));
+      });
+      _scrollToBottom();
+      return;
+    }
+
+    await _resolveCommandApproval(approvalId, action);
+  }
+
+  Future<void> _showRelayApprovalDetailSheet(
+      Map<String, dynamic> approval) async {
+    if (!mounted) return;
+
+    final approvalId = approval['approval_id']?.toString() ?? '(unknown)';
+    final commandRaw = _approvalCommandRaw(approval);
+    final policy = approval['policy'] as Map<String, dynamic>? ?? {};
+    final riskLevel = policy['risk_level']?.toString() ?? 'unknown';
+    final reasons = List<String>.from(
+        (policy['reasons'] as List? ?? []).map((e) => e.toString()));
+    final createdAt = _timestampLabelFromMap(approval);
+    final requestType = _approvalRequestTypeLabel(approval);
+    final requestedBy = _approvalRequestedBy(approval);
+    final cwd = _approvalWorkingDirectory(approval);
+    final ruleId = _approvalPolicyRule(approval);
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        final scheme = Theme.of(sheetContext).colorScheme;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Approval detail',
+                      style: Theme.of(sheetContext)
+                          .textTheme
+                          .titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 8),
+                  Text('ID: $approvalId',
+                      style: TextStyle(fontSize: 12, color: scheme.onSurface)),
+                  Text('Created: $createdAt',
+                      style: TextStyle(
+                          fontSize: 12, color: scheme.onSurfaceVariant)),
+                  Text('Type: $requestType',
+                      style: TextStyle(
+                          fontSize: 12, color: scheme.onSurfaceVariant)),
+                  Text('Requested by: $requestedBy',
+                      style: TextStyle(
+                          fontSize: 12, color: scheme.onSurfaceVariant)),
+                  if (cwd.isNotEmpty)
+                    Text('CWD: $cwd',
+                        style: TextStyle(
+                            fontSize: 12, color: scheme.onSurfaceVariant)),
+                  if (ruleId.isNotEmpty)
+                    Text('Policy rule: $ruleId',
+                        style: TextStyle(
+                            fontSize: 12, color: scheme.onSurfaceVariant)),
+                  const SizedBox(height: 12),
+                  Text(
+                    commandRaw,
+                    style:
+                        const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  Text('Risk: $riskLevel',
+                      style: TextStyle(
+                          color: _riskColor(riskLevel),
+                          fontWeight: FontWeight.w700)),
+                  if (reasons.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    ...reasons.map((reason) => Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text('• $reason',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: scheme.onSurfaceVariant)),
+                        )),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showCodexRequestDetailSheet(
+      Map<String, dynamic> request) async {
+    if (!mounted) return;
+
+    final requestId = request['requestId']?.toString() ?? '(unknown)';
+    final summary = _codexRequestSummary(request);
+    final detailLines = List<String>.from(
+        (request['detailLines'] as List? ?? []).map((e) => e.toString()));
+    final choices = List<Map<String, dynamic>>.from(
+        (request['choices'] as List? ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map)));
+    final timestamp = _timestampLabelFromMap(request,
+        preferredKeys: const ['timestamp', 'created_at', 'createdAt']);
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        final scheme = Theme.of(sheetContext).colorScheme;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(_codexRequestTitle(request),
+                      style: Theme.of(sheetContext)
+                          .textTheme
+                          .titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 8),
+                  Text('ID: $requestId',
+                      style: TextStyle(fontSize: 12, color: scheme.onSurface)),
+                  Text('Time: $timestamp',
+                      style: TextStyle(
+                          fontSize: 12, color: scheme.onSurfaceVariant)),
+                  if (summary.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    SelectableText(summary,
+                        style: const TextStyle(
+                            fontFamily: 'monospace', fontSize: 12)),
+                  ],
+                  if (detailLines.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    ...detailLines.map((line) => Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text(line,
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: scheme.onSurfaceVariant)),
+                        )),
+                  ],
+                  if (choices.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text('Choices',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: scheme.onSurface)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: choices
+                          .map((choice) => Chip(
+                                label: Text(choice['label']?.toString() ?? '-'),
+                              ))
+                          .toList(),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _loadCommandEvents({int limit = 20, bool silent = false}) async {
+    if (_isDemoMode) return;
     if (!_isConnected || _sessionId == null) return;
     if (_connectionType != ConnectionType.relay) return;
+    if (!_isNetworkReachable) {
+      if (!silent && mounted) {
+        setState(() {
+          _messages.add(MessageItem('📡 오프라인 상태에서는 이벤트 목록을 불러올 수 없어요.',
+              type: MessageType.system));
+        });
+        _scrollToBottom();
+      }
+      return;
+    }
     if (_loadingCommandEvents) return;
 
     if (mounted) {
@@ -3217,8 +5616,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         final events = List<Map<String, dynamic>>.from(
             (data['events'] as List? ?? [])
                 .map((e) => Map<String, dynamic>.from(e as Map)));
+        final mergedEvents = _mergeCommandEvents(events);
         setState(() {
-          _recentCommandEvents = events;
+          _recentCommandEvents = mergedEvents;
+          _pruneResolvedApprovalEventFallbacks(events);
           _loadingCommandEvents = false;
         });
 
@@ -3253,9 +5654,105 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  List<Map<String, dynamic>> _mergeCommandEvents(
+      List<Map<String, dynamic>> events) {
+    final merged = <Map<String, dynamic>>[];
+    final seen = <String>{};
+
+    void addIfNew(Map<String, dynamic> event) {
+      final approvalId = _extractApprovalIdFromCommandEvent(event);
+      final status = _deriveApprovalStatusFromEvent(event) ?? '';
+      final key = _approvalHistoryStatusKey(approvalId, status);
+      if (key.isNotEmpty && seen.contains(key)) return;
+      if (key.isNotEmpty) seen.add(key);
+      merged.add(event);
+    }
+
+    for (final event in events) {
+      addIfNew(event);
+    }
+
+    for (final fallback in _resolvedApprovalEventFallbacks.values) {
+      addIfNew(Map<String, dynamic>.from(fallback));
+    }
+
+    merged.sort((a, b) {
+      final at = _parseTimestampValue(a['timestamp']) ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      final bt = _parseTimestampValue(b['timestamp']) ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      return bt.compareTo(at);
+    });
+
+    return merged;
+  }
+
+  void _pruneResolvedApprovalEventFallbacks(List<Map<String, dynamic>> events) {
+    final seen = <String>{};
+    for (final event in events) {
+      final approvalId = _extractApprovalIdFromCommandEvent(event);
+      final status = _deriveApprovalStatusFromEvent(event) ?? '';
+      final key = _approvalHistoryStatusKey(approvalId, status);
+      if (key.isNotEmpty) {
+        seen.add(key);
+      }
+    }
+    _resolvedApprovalEventFallbacks.removeWhere(
+      (key, _) => seen.contains(key),
+    );
+  }
+
+  Future<void> _waitForApprovalResolution(
+    String approvalId, {
+    required String expectedStatus,
+    int attempts = 5,
+    Duration interval = const Duration(milliseconds: 700),
+  }) async {
+    var remaining = attempts;
+    while (remaining > 0 && mounted) {
+      remaining -= 1;
+      await Future<void>.delayed(interval);
+      await _loadCommandEvents(silent: true);
+      final matched = _recentCommandEvents.any((event) {
+        final approvalIdFromEvent = _extractApprovalIdFromCommandEvent(event);
+        if (approvalIdFromEvent != approvalId) return false;
+        return _deriveApprovalStatusFromEvent(event) == expectedStatus;
+      });
+      if (matched) return;
+    }
+  }
+
   Future<void> _resolveCommandApproval(String approvalId, String action) async {
+    if (_isDemoMode) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('심사 모드에서는 승인 응답이 샘플 동작입니다.')),
+        );
+      }
+      return;
+    }
     if (!_isConnected || _sessionId == null) return;
     if (_connectionType != ConnectionType.relay) return;
+    final normalizedAction = action == 'deny' ? 'reject' : action;
+
+    Map<String, dynamic>? approvalSnapshot;
+    for (final approval in _pendingCommandApprovals) {
+      if (approval['approval_id']?.toString() == approvalId) {
+        approvalSnapshot = approval;
+        break;
+      }
+    }
+    final commandRaw = approvalSnapshot != null
+        ? _truncateForLog(_approvalCommandRaw(approvalSnapshot), maxLength: 54)
+        : '';
+    final needsAssistantResponse = approvalSnapshot != null
+        ? _approvalNeedsAssistantResponse(approvalSnapshot)
+        : false;
+    final resolvedHistoryStatus = normalizedAction == 'approve'
+        ? 'approved'
+        : normalizedAction == 'reject'
+            ? 'rejected'
+            : normalizedAction;
 
     try {
       final response = await http.post(
@@ -3264,7 +5761,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         body: jsonEncode({
           'sessionId': _sessionId,
           'approvalId': approvalId,
-          'action': action,
+          'action': normalizedAction,
           'resolvedBy': _deviceId,
           'reason': 'resolved via mobile app',
         }),
@@ -3276,22 +5773,48 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (!mounted) return;
       if (response.statusCode == 200 && body['success'] == true) {
         final status =
-            (body['data'] as Map<String, dynamic>? ?? {})['status'] ?? action;
+            (body['data'] as Map<String, dynamic>? ?? {})['status'] ??
+                normalizedAction;
+        final normalizedStatus = status is String
+            ? _normalizeApprovalStatusFromEvent({
+                'approval': {'status': status},
+              })
+            : resolvedHistoryStatus;
+        if (approvalSnapshot != null) {
+          _upsertResolvedApprovalEventFallback(
+            approvalSnapshot,
+            status: normalizedStatus,
+          );
+          setState(() {
+            _recentCommandEvents = _mergeCommandEvents(_recentCommandEvents);
+          });
+        }
         setState(() {
+          if (normalizedAction == 'approve' && needsAssistantResponse) {
+            _isWaitingForResponse = true;
+          } else if (normalizedAction != 'approve') {
+            _isWaitingForResponse = false;
+          }
           _messages.add(MessageItem(
-              '✅ Approval resolved: $approvalId → $status',
+              normalizedAction == 'approve' && needsAssistantResponse
+                  ? '✅ Approval 응답: $approvalId → $status · 응답 대기 유지${commandRaw.isNotEmpty ? ' · $commandRaw' : ''}'
+                  : '✅ Approval 응답: $approvalId → $status${commandRaw.isNotEmpty ? ' · $commandRaw' : ''}',
               type: MessageType.system));
         });
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Approval $action 완료')),
+          SnackBar(content: Text('Approval $normalizedAction 완료')),
         );
         _scrollToBottom();
         await _loadCommandApprovals(silent: true);
         await _loadCommandEvents(silent: true);
+        if (approvalSnapshot != null) {
+          unawaited(_waitForApprovalResolution(approvalId,
+              expectedStatus: normalizedStatus));
+        }
       } else {
         setState(() {
           _messages.add(MessageItem(
-              '❌ Approval 처리 실패: ${body['error'] ?? 'HTTP ${response.statusCode}'}',
+              '❌ Approval 처리 실패($normalizedAction): ${body['error'] ?? 'HTTP ${response.statusCode}'}',
               type: MessageType.system));
         });
         _scrollToBottom();
@@ -3304,6 +5827,23 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       });
       _scrollToBottom();
     }
+  }
+
+  void _markRelayApprovalLater(Map<String, dynamic> approval) {
+    final approvalId = approval['approval_id']?.toString() ?? '(unknown)';
+    final commandRaw =
+        _truncateForLog(_approvalCommandRaw(approval), maxLength: 54);
+
+    if (!mounted) return;
+    setState(() {
+      _messages.add(MessageItem(
+          '🕒 Approval 보류(Later): $approvalId${commandRaw.isNotEmpty ? ' · $commandRaw' : ''}',
+          type: MessageType.system));
+    });
+    _scrollToBottom();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('승인 요청을 나중에 처리하도록 남겨뒀어요.')),
+    );
   }
 
   bool _isTargetedToThisMobile(Map<String, dynamic> payload) {
@@ -3329,6 +5869,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _pendingCodexServerRequests
         .removeWhere((item) => item['requestId']?.toString() == requestId);
     _submittingCodexRequestIds.remove(requestId);
+    _cancelAutoDecisionTimer(requestId);
   }
 
   String _codexRequestTitle(Map<String, dynamic> request) {
@@ -3354,27 +5895,200 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return detailLines.isNotEmpty ? detailLines.first : '';
   }
 
+  Color _codexRequestAccentColor(
+      BuildContext context, Map<String, dynamic> request) {
+    final kind = request['requestKind']?.toString() ?? '';
+    final scheme = Theme.of(context).colorScheme;
+    switch (kind) {
+      case 'command_execution':
+      case 'file_change':
+        return scheme.error;
+      case 'user_input':
+        return scheme.tertiary;
+      default:
+        return scheme.primary;
+    }
+  }
+
+  Future<void> _showCodexServerRequestDialog(
+      Map<String, dynamic> request) async {
+    if (!mounted) return;
+
+    final requestId = request['requestId']?.toString() ?? '';
+    if (requestId.isEmpty) return;
+
+    final requestKind = request['requestKind']?.toString() ?? '';
+    final summary = _codexRequestSummary(request);
+    final detailLines = List<String>.from(
+        (request['detailLines'] as List? ?? []).map((e) => e.toString()));
+    final choices = List<Map<String, dynamic>>.from(
+        (request['choices'] as List? ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map)));
+
+    bool decisionSubmitted = false;
+    bool deferredByLaterButton = false;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) {
+        final accentColor = _codexRequestAccentColor(dialogContext, request);
+        final scheme = Theme.of(dialogContext).colorScheme;
+
+        return AlertDialog(
+          icon: Icon(Icons.notification_important_rounded,
+              color: accentColor, size: 32),
+          title: Text(_codexRequestTitle(request)),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: accentColor.withOpacity(0.10),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: accentColor.withOpacity(0.28)),
+                  ),
+                  child: Text(
+                    '모바일에서 선택해야 Codex가 계속 진행됩니다.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: accentColor,
+                    ),
+                  ),
+                ),
+                if (_autoDecisionMode != AutoDecisionMode.off &&
+                    requestKind != 'user_input') ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    '응답이 ${_autoDecisionTimeoutSec}초 없으면 ${_autoDecisionModeLabel(_autoDecisionMode)}가 실행됩니다.',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+                if (summary.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  SelectableText(
+                    summary,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+                if (detailLines.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  ...detailLines.map(
+                    (line) => Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Text(
+                        line,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                deferredByLaterButton = true;
+                Navigator.of(dialogContext).pop();
+              },
+              child: const Text('Later'),
+            ),
+            if (requestKind == 'user_input')
+              FilledButton(
+                onPressed: () {
+                  decisionSubmitted = true;
+                  Navigator.of(dialogContext).pop();
+                  _openCodexUserInputDialog(request);
+                },
+                child: const Text('Respond now'),
+              )
+            else
+              ...choices.map((choice) {
+                final label = choice['label']?.toString() ?? 'Respond';
+                final style = choice['style']?.toString() ?? 'secondary';
+                final responsePayload =
+                    Map<String, dynamic>.from(choice['response'] as Map? ?? {});
+                final onPressed = () {
+                  decisionSubmitted = true;
+                  Navigator.of(dialogContext).pop();
+                  _submitCodexDecision(request, responsePayload);
+                };
+
+                if (style == 'primary') {
+                  return FilledButton(
+                    onPressed: onPressed,
+                    child: Text(label),
+                  );
+                }
+
+                return OutlinedButton(
+                  onPressed: onPressed,
+                  style: style == 'danger'
+                      ? OutlinedButton.styleFrom(
+                          foregroundColor: scheme.error,
+                        )
+                      : null,
+                  child: Text(label),
+                );
+              }),
+          ],
+        );
+      },
+    );
+
+    if (!mounted || decisionSubmitted) return;
+    final deferredReason = deferredByLaterButton ? 'later' : 'dismissed';
+    setState(() {
+      _messages.add(MessageItem(
+          '🕒 ${_codexRequestTitle(request)} 보류됨 ($deferredReason)',
+          type: MessageType.system));
+    });
+    _scrollToBottom();
+  }
+
   Future<void> _handleCodexServerRequest(Map<String, dynamic> payload) async {
     if (!_isTargetedToThisMobile(payload)) return;
 
     final requestId = payload['requestId']?.toString() ?? '';
     if (requestId.isEmpty) return;
+    final isNewRequest = _seenCodexRequestIds.add(requestId);
 
     if (!mounted) return;
     setState(() {
       _upsertPendingCodexServerRequest(payload);
-      _messages.add(MessageItem('📲 ${_codexRequestTitle(payload)} — 모바일 응답 필요',
-          type: MessageType.system));
+      if (isNewRequest) {
+        final summary =
+            _truncateForLog(_codexRequestSummary(payload), maxLength: 56);
+        _messages.add(MessageItem(
+            '📩 ${_codexRequestTitle(payload)} 요청 도착${summary.isNotEmpty ? ' · $summary' : ''}',
+            type: MessageType.system));
+      }
       _isWaitingForResponse = false;
     });
     _scrollToBottom();
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(_codexRequestTitle(payload)),
-        duration: const Duration(seconds: 3),
-      ),
-    );
+    HapticFeedback.heavyImpact();
+    if (isNewRequest) {
+      unawaited(_maybeNotifyApprovalArrival(newCodexRequests: 1));
+    }
+    _scheduleAutoDecisionForCodexRequest(payload);
+    unawaited(_showCodexServerRequestDialog(payload));
   }
 
   void _handleCodexServerRequestStatus(Map<String, dynamic> payload) {
@@ -3387,10 +6101,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     setState(() {
       _removePendingCodexServerRequest(requestId);
-      if (message.isNotEmpty) {
-        _messages.add(MessageItem('ℹ️ ${_codexRequestTitle(payload)}: $message',
-            type: MessageType.system));
-      }
+      final statusText = message.isNotEmpty ? message : status;
+      _messages.add(MessageItem(
+          'ℹ️ ${_codexRequestTitle(payload)} 상태: $statusText',
+          type: MessageType.system));
     });
     _scrollToBottom();
 
@@ -3404,6 +6118,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   Future<void> _sendCodexServerRequestResponse(Map<String, dynamic> request,
       Map<String, dynamic> responsePayload) async {
+    if (_isDemoMode) return;
     final requestId = request['requestId']?.toString() ?? '';
     final method = request['method']?.toString() ?? '';
     if (requestId.isEmpty || method.isEmpty) {
@@ -3457,8 +6172,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   Future<void> _submitCodexDecision(Map<String, dynamic> request,
       Map<String, dynamic> responsePayload) async {
+    if (_isDemoMode) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('심사 모드에서는 요청 응답이 샘플 동작입니다.')),
+        );
+      }
+      return;
+    }
     final requestId = request['requestId']?.toString() ?? '';
     if (requestId.isEmpty || !mounted) return;
+    _cancelAutoDecisionTimer(requestId);
+    final decisionLabel = _describeDecisionPayload(responsePayload);
 
     setState(() {
       _submittingCodexRequestIds.add(requestId);
@@ -3469,7 +6194,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (!mounted) return;
       setState(() {
         _removePendingCodexServerRequest(requestId);
-        _messages.add(MessageItem('✅ ${_codexRequestTitle(request)} 응답 전송됨',
+        _messages.add(MessageItem(
+            '✅ ${_codexRequestTitle(request)} 응답 전송됨 → $decisionLabel',
             type: MessageType.system));
       });
       _scrollToBottom();
@@ -3477,7 +6203,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (!mounted) return;
       setState(() {
         _submittingCodexRequestIds.remove(requestId);
-        _messages.add(MessageItem('❌ 요청 응답 실패: $e', type: MessageType.system));
+        _messages.add(MessageItem('❌ 요청 응답 실패($decisionLabel): $e',
+            type: MessageType.system));
       });
       _scrollToBottom();
       ScaffoldMessenger.of(context).showSnackBar(
@@ -3636,6 +6363,187 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  List<Map<String, dynamic>> _buildDecisionTimelineEntries() {
+    final entries = <Map<String, dynamic>>[];
+
+    for (final approval in _pendingCommandApprovals) {
+      final commandRaw = _approvalCommandRaw(approval);
+      final requestedBy = _approvalRequestedBy(approval);
+      final policy = approval['policy'] as Map<String, dynamic>? ?? {};
+      final riskLevel = policy['risk_level']?.toString() ?? 'unknown';
+      final when =
+          _parseTimestampValue(approval['created_at']) ?? DateTime.now();
+
+      entries.add({
+        'kind': 'approval_pending',
+        'time': when,
+        'title': '승인 대기: $commandRaw',
+        'subtitle': 'by $requestedBy · risk: $riskLevel',
+        'approvalId': approval['approval_id']?.toString(),
+        'payload': approval,
+      });
+    }
+
+    for (final request in _pendingCodexServerRequests) {
+      final title = _codexRequestTitle(request);
+      final summary = _codexRequestSummary(request);
+      final when = _parseTimestampValue(request['timestamp']) ?? DateTime.now();
+
+      entries.add({
+        'kind': 'codex_request_pending',
+        'time': when,
+        'title': '요청 대기: $title',
+        'subtitle': summary.isNotEmpty ? summary : '모바일 응답 필요',
+        'approvalId': null,
+        'payload': request,
+      });
+    }
+
+    for (final event in _recentCommandEvents) {
+      final result = event['result'] as Map<String, dynamic>? ?? {};
+      final command = event['command'] as Map<String, dynamic>? ?? {};
+      final approval = event['approval'] as Map<String, dynamic>? ?? {};
+      final status = result['status']?.toString() ?? 'unknown';
+      final raw = command['raw']?.toString() ?? '(unknown)';
+      final approvalStatus = approval['status']?.toString() ?? 'not_required';
+      final when = _parseTimestampValue(event['timestamp']) ??
+          _parseTimestampValue(event['created_at']) ??
+          DateTime.now();
+
+      entries.add({
+        'kind': 'command_event',
+        'time': when,
+        'title': '실행 결과: $status • $raw',
+        'subtitle': 'approval: $approvalStatus',
+        'approvalId': _extractApprovalIdFromCommandEvent(event),
+        'payload': event,
+      });
+    }
+
+    entries.sort((a, b) {
+      final at = a['time'] as DateTime;
+      final bt = b['time'] as DateTime;
+      return bt.compareTo(at);
+    });
+    return entries;
+  }
+
+  String? _extractApprovalIdFromCommandEvent(Map<String, dynamic> event) {
+    final direct = event['approval_id']?.toString().trim();
+    if (direct != null && direct.isNotEmpty) return direct;
+
+    final metadata = event['metadata'] as Map<String, dynamic>? ?? {};
+    final metadataId = metadata['approval_id']?.toString().trim();
+    if (metadataId != null && metadataId.isNotEmpty) return metadataId;
+
+    final approval = event['approval'] as Map<String, dynamic>? ?? {};
+    final approvalId = approval['approval_id']?.toString().trim();
+    if (approvalId != null && approvalId.isNotEmpty) return approvalId;
+
+    return null;
+  }
+
+  IconData _timelineIcon(String kind, String title) {
+    if (kind == 'approval_pending') return Icons.lock_clock;
+    if (kind == 'codex_request_pending') return Icons.pending_actions;
+    if (title.contains('success')) return Icons.check_circle_outline;
+    if (title.contains('error') || title.contains('cancelled')) {
+      return Icons.error_outline;
+    }
+    return Icons.timeline;
+  }
+
+  String _prettyJson(dynamic payload) {
+    try {
+      const encoder = JsonEncoder.withIndent('  ');
+      return encoder.convert(payload);
+    } catch (_) {
+      return payload?.toString() ?? '(empty)';
+    }
+  }
+
+  Future<void> _showTimelineEntryDetailSheet(Map<String, dynamic> entry) async {
+    if (!mounted) return;
+    final kind = entry['kind']?.toString() ?? 'unknown';
+    final title = entry['title']?.toString() ?? '(untitled)';
+    final subtitle = entry['subtitle']?.toString() ?? '';
+    final time = entry['time'] as DateTime? ?? DateTime.now();
+    final approvalId = entry['approvalId']?.toString();
+    final payload = entry['payload'];
+    final prettyPayload = _prettyJson(payload);
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        final scheme = Theme.of(sheetContext).colorScheme;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: Theme.of(sheetContext)
+                        .textTheme
+                        .titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 6),
+                  Text('kind: $kind',
+                      style: TextStyle(
+                          fontSize: 12, color: scheme.onSurfaceVariant)),
+                  Text('time: ${_formatTime(time)}',
+                      style: TextStyle(
+                          fontSize: 12, color: scheme.onSurfaceVariant)),
+                  if (subtitle.isNotEmpty)
+                    Text('summary: $subtitle',
+                        style: TextStyle(
+                            fontSize: 12, color: scheme.onSurfaceVariant)),
+                  if (approvalId != null && approvalId.isNotEmpty)
+                    Text('approvalId: $approvalId',
+                        style: TextStyle(
+                            fontSize: 12, color: scheme.onSurfaceVariant)),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      FilledButton.tonalIcon(
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(text: prettyPayload));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('타임라인 payload가 복사되었습니다.'),
+                              duration: Duration(seconds: 1),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.copy, size: 16),
+                        label: const Text('Copy payload'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  SelectableText(
+                    prettyPayload,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontFamily: 'monospace',
+                      color: scheme.onSurface,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   /// 대화 메시지만 제거 (시스템/로그 메시지는 유지) - 현재 세션만 표시할 때 사용
   void _clearConversationMessages() {
     _messages.removeWhere((m) {
@@ -3681,6 +6589,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   // 연결 상태 확인 및 필요시 재연결
   void _checkConnectionState() {
+    if (_isDemoMode) return;
     if (_connectionType == ConnectionType.local) {
       // 로컬 연결: WebSocket 상태 확인
       if (_localWebSocket == null && _isConnected) {
@@ -3720,7 +6629,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _scrollController.removeListener(_updateScrollButtonVisibility);
     WidgetsBinding.instance.removeObserver(this);
     AppSettings().removeListener(_onAppSettingsChanged);
-    _capabilitiesLoadTimer?.cancel();
+    _cancelCapabilitiesSequenceTimers();
+    _connectivitySubscription?.cancel();
     _stopPolling();
     _localWebSocket?.sink.close();
     _commandController.dispose();
@@ -3934,36 +6844,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     ),
                   ),
                   onSubmitted: (value) {
-                    final text = value.trim();
-                    if (text.isEmpty ||
-                        !_isConnected ||
-                        _isWaitingForResponse) {
-                      return;
-                    }
-                    _sendCommand('insert_text',
-                        text: text,
-                        prompt: true,
-                        execute: true,
-                        newSession: false,
-                        agentMode: _selectedAgentMode);
-                    _clearCommandInput();
+                    unawaited(_submitPromptFromInput(newSession: false));
                   },
                 ),
               ),
               const SizedBox(width: 8),
               IconButton.filled(
                 onPressed: () {
-                  final text = _commandController.text.trim();
-                  if (text.isEmpty || !_isConnected || _isWaitingForResponse) {
-                    return;
-                  }
-                  _sendCommand('insert_text',
-                      text: text,
-                      prompt: true,
-                      execute: true,
-                      newSession: false,
-                      agentMode: _selectedAgentMode);
-                  _clearCommandInput();
+                  unawaited(_submitPromptFromInput(newSession: false));
                 },
                 icon: const Icon(Icons.send),
                 tooltip: '전송',
@@ -3975,8 +6863,507 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
+  Widget _buildChatGptLikeBody() {
+    final selectedModelValue = _selectedModel == 'auto' ||
+            _availableModels.any((item) =>
+                (item['model'] ?? '').toString().trim() == _selectedModel)
+        ? _selectedModel
+        : 'auto';
+    final selectedReasoningValue = _selectedReasoningEffort == 'auto' ||
+            _getAvailableReasoningEffortsForModel(_selectedModel)
+                .contains(_selectedReasoningEffort)
+        ? _selectedReasoningEffort
+        : 'auto';
+    final modelItems = <PromptOptionItem>[
+      const PromptOptionItem(value: 'auto', label: 'Auto (기본값)'),
+      ..._availableModels.map((item) {
+        final model = (item['model'] ?? '').toString().trim();
+        return PromptOptionItem(
+          value: model,
+          label: _getModelDisplayName(model),
+        );
+      }),
+    ];
+    final reasoningItems = <PromptOptionItem>[
+      const PromptOptionItem(value: 'auto', label: 'Auto'),
+      ..._getAvailableReasoningEffortsForModel(_selectedModel).map(
+        (effort) => PromptOptionItem(
+          value: effort,
+          label: _getReasoningEffortDisplayName(effort),
+        ),
+      ),
+    ];
+
+    return Column(
+      children: [
+        Expanded(
+          child: Container(
+            color: Theme.of(context).colorScheme.surface,
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
+            child: _buildMessageListWithScrollButtons(),
+          ),
+        ),
+        SafeArea(
+          top: false,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface,
+              border: Border(
+                top: BorderSide(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                ChatPromptOptionsBar(
+                  showLoading: _capabilitiesLoading && !_capabilitiesLoaded,
+                  loadingLabel: _modelCatalogLoadingText,
+                  selectedModelLabel: _getModelDisplayName(selectedModelValue),
+                  selectedReasoningLabel:
+                      _getReasoningEffortDisplayName(selectedReasoningValue),
+                  modelItems: modelItems,
+                  reasoningItems: reasoningItems,
+                  onModelSelected: (value) {
+                    setState(() {
+                      _selectedModel = _normalizeModel(value);
+                      _selectedReasoningEffort = _normalizeReasoningEffort(
+                          _selectedReasoningEffort, _selectedModel);
+                    });
+                    unawaited(AppSettings().setDefaultModel(_selectedModel));
+                  },
+                  onReasoningSelected: (value) {
+                    setState(() {
+                      _selectedReasoningEffort =
+                          _normalizeReasoningEffort(value, _selectedModel);
+                    });
+                    unawaited(
+                      AppSettings()
+                          .setDefaultReasoningEffort(_selectedReasoningEffort),
+                    );
+                  },
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _commandController,
+                        focusNode: _commandFocusNode,
+                        minLines: 1,
+                        maxLines: 4,
+                        textInputAction: TextInputAction.send,
+                        decoration: InputDecoration(
+                          hintText: _isWaitingForResponse
+                              ? '응답 생성 중...'
+                              : '메시지를 입력하세요',
+                          filled: true,
+                          fillColor: Theme.of(context)
+                              .colorScheme
+                              .surfaceContainerHighest,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 12),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(26),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                        onSubmitted: (_) {
+                          unawaited(_submitPromptFromInput(newSession: false));
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton.filled(
+                      onPressed: _isWaitingForResponse
+                          ? null
+                          : () {
+                              unawaited(
+                                  _submitPromptFromInput(newSession: false));
+                            },
+                      icon: const Icon(Icons.arrow_upward),
+                      tooltip: '보내기',
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildConnectionFirstScaffold() {
+    final history = AppSettings().connectionHistory;
+    final isBusy = _isReconnecting || _isConnectionActionInProgress;
+    final actionLabel = _connectionActionLabel ??
+        (_connectionType == ConnectionType.local
+            ? '로컬 서버 연결 요청 중...'
+            : '릴레이 세션 연결 요청 중...');
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('연결'),
+        actions: [
+          _buildExitDemoModeButton(),
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: '설정',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => SettingsPage(
+                    isDemoMode: _isDemoMode,
+                    onExitDemoMode: widget.onExitDemoMode,
+                    onEnterDemoMode: widget.onEnterDemoMode,
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
+        children: [
+          _buildDemoModeGuideBanner(),
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '첫 연결을 시작해요',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: Theme.of(context).colorScheme.onSurface,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '연결이 완료되면 Chat/Approvals/Sessions/Settings를 사용할 수 있어요.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.4,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                SegmentedButton<ConnectionType>(
+                  segments: const [
+                    ButtonSegment<ConnectionType>(
+                      value: ConnectionType.local,
+                      label: Text('로컬'),
+                      icon: Icon(Icons.computer, size: 18),
+                    ),
+                    ButtonSegment<ConnectionType>(
+                      value: ConnectionType.relay,
+                      label: Text('릴레이'),
+                      icon: Icon(Icons.cloud, size: 18),
+                    ),
+                  ],
+                  selected: {_connectionType},
+                  onSelectionChanged: isBusy
+                      ? null
+                      : (selection) {
+                          setState(() {
+                            _connectionType = selection.first;
+                          });
+                        },
+                ),
+                const SizedBox(height: 14),
+                if (_connectionType == ConnectionType.local)
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _localIpController,
+                          focusNode: _localIpFocusNode,
+                          textInputAction: TextInputAction.next,
+                          decoration: const InputDecoration(
+                            labelText: 'PC IP',
+                            hintText: '192.168.0.10',
+                            prefixIcon: Icon(Icons.lan_outlined),
+                          ),
+                          enabled: !isBusy,
+                          onSubmitted: (_) => unawaited(_connect()),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 104,
+                        child: TextField(
+                          controller: _localPortController,
+                          decoration: const InputDecoration(
+                            labelText: '포트',
+                            hintText: '8766',
+                          ),
+                          keyboardType: TextInputType.number,
+                          enabled: !isBusy,
+                          onSubmitted: (_) => unawaited(_connect()),
+                        ),
+                      ),
+                    ],
+                  )
+                else
+                  TextField(
+                    controller: _sessionIdController,
+                    focusNode: _sessionIdFocusNode,
+                    textCapitalization: TextCapitalization.characters,
+                    decoration: const InputDecoration(
+                      labelText: 'Session ID',
+                      hintText: 'ABC123',
+                      prefixIcon: Icon(Icons.cloud_outlined),
+                    ),
+                    enabled: !isBusy,
+                    onSubmitted: (_) => unawaited(_connect()),
+                  ),
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: isBusy
+                        ? null
+                        : () {
+                            unawaited(_connect());
+                          },
+                    icon: isBusy
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.link),
+                    label: Text(isBusy ? '처리 중...' : '연결하기'),
+                  ),
+                ),
+                if (!_isDemoMode && widget.onEnterDemoMode != null) ...[
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        unawaited(_enterDemoMode());
+                      },
+                      icon: const Icon(Icons.visibility),
+                      label: const Text('앱 둘러보기 시작'),
+                    ),
+                  ),
+                ],
+                if (_isConnectionActionInProgress) ...[
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          actionLabel,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+                if (_isReconnecting) ...[
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _forceStopReconnect,
+                      icon: const Icon(Icons.stop_circle_outlined),
+                      label: const Text('자동 재연결 중지'),
+                    ),
+                  ),
+                ],
+                if (_lastConnectionError != null) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    '마지막 오류: $_lastConnectionError',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (history.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text(
+              '최근 연결',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Card(
+              margin: EdgeInsets.zero,
+              child: Column(
+                children: history.map((item) {
+                  return ListTile(
+                    leading: Icon(
+                      item.type == ConnectionType.local
+                          ? Icons.computer_outlined
+                          : Icons.cloud_outlined,
+                    ),
+                    title: Text(item.displayText),
+                    subtitle: Text(item.relativeTime),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: isBusy ? null : () => _connectFromHistory(item),
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _homeTabTitle(HomeTab tab) {
+    switch (tab) {
+      case HomeTab.chat:
+        return 'Chat';
+      case HomeTab.approvals:
+        return 'Approvals';
+      case HomeTab.sessions:
+        return 'Sessions';
+      case HomeTab.settings:
+        return 'Settings';
+    }
+  }
+
+  String _homeTabSubtitle(HomeTab tab) {
+    switch (tab) {
+      case HomeTab.chat:
+        return _isConnected
+            ? '대화를 이어가고 Codex 진행 상황을 확인하세요.'
+            : '연결 후 바로 프롬프트를 보낼 수 있어요.';
+      case HomeTab.approvals:
+        return '모바일 승인 요청과 대기 중인 액션을 한곳에서 처리합니다.';
+      case HomeTab.sessions:
+        return '연결 상태와 최근 연결 정보를 확인합니다.';
+      case HomeTab.settings:
+        return '앱 환경설정과 기본 동작을 정리합니다.';
+    }
+  }
+
+  Future<void> _selectHomeTab(HomeTab tab) async {
+    if (!mounted) return;
+    setState(() => _selectedHomeTab = tab);
+
+    if (!_isConnected) return;
+    if (tab == HomeTab.approvals && _connectionType == ConnectionType.relay) {
+      unawaited(_loadCommandApprovals(silent: true));
+      unawaited(_loadCommandEvents(silent: true));
+    }
+    if (tab == HomeTab.sessions) {
+      unawaited(_loadSessionInfo());
+    }
+  }
+
+  Widget _buildApprovalsTabBody() {
+    return ApprovalsTabView(
+      isConnected: _isConnected,
+      isRelayMode: _connectionType == ConnectionType.relay,
+      pendingCodexServerRequests: _pendingCodexServerRequests,
+      pendingCommandApprovals: _pendingCommandApprovals,
+      processedCommandApprovals: _buildResolvedApprovalHistoryEntries(),
+      submittingCodexRequestIds: _submittingCodexRequestIds,
+      subtitle: _homeTabSubtitle(HomeTab.approvals),
+      onOpenChat: () {
+        unawaited(_selectHomeTab(HomeTab.chat));
+      },
+      onRefresh: () async {
+        await _loadCommandApprovals(silent: true);
+        await _loadCommandEvents(silent: true);
+      },
+      codexRequestTitle: _codexRequestTitle,
+      codexRequestSummary: _codexRequestSummary,
+      codexRequestAccentColor: _codexRequestAccentColor,
+      onShowCodexRequestDetail: _showCodexRequestDetailSheet,
+      onOpenCodexUserInputDialog: _openCodexUserInputDialog,
+      onSubmitCodexDecision: _submitCodexDecision,
+      approvalRequestTypeLabel: _approvalRequestTypeLabel,
+      approvalCommandRaw: _approvalCommandRaw,
+      approvalRequestedBy: _approvalRequestedBy,
+      onResolveCommandApproval: (approval, action) {
+        unawaited(_confirmAndResolveApproval(approval, action));
+      },
+      onMarkRelayApprovalLater: _markRelayApprovalLater,
+      truncateForLog: _truncateForLog,
+    );
+  }
+
+  Widget _buildSessionsTabBody() {
+    return SessionsTabView(
+      isConnected: _isConnected,
+      connectionType: _connectionType,
+      sessionId: _sessionId,
+      currentCodexSessionId: _currentCodexSessionId,
+      connectionHistory: AppSettings().connectionHistory,
+      subtitle: _homeTabSubtitle(HomeTab.sessions),
+      onRefresh: () {
+        unawaited(_loadSessionInfo());
+      },
+      onDisconnect: _disconnect,
+      onOpenChat: () {
+        unawaited(_selectHomeTab(HomeTab.chat));
+      },
+      onConnectFromHistory: _connectFromHistory,
+    );
+  }
+
+  Widget _buildSettingsTabBody() {
+    return SettingsTabView(
+      settings: AppSettings(),
+      subtitle: _homeTabSubtitle(HomeTab.settings),
+      onOpenSettings: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+              builder: (context) => SettingsPage(
+                isDemoMode: _isDemoMode,
+                onExitDemoMode: widget.onExitDemoMode,
+                onEnterDemoMode: widget.onEnterDemoMode,
+              ),
+            ),
+          );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (!_isConnected) {
+      return _buildConnectionFirstScaffold();
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: Row(
@@ -4003,15 +7390,31 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: Text(
-                'Codex Remote',
-                style: Theme.of(context).appBarTheme.titleTextStyle,
-                overflow: TextOverflow.ellipsis,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Codex Remote',
+                    style: Theme.of(context).appBarTheme.titleTextStyle,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    _homeTabTitle(_selectedHomeTab),
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
               ),
             ),
           ],
         ),
         actions: [
+          _buildExitDemoModeButton(),
           // 응답 대기 중 인디케이터
           if (_isWaitingForResponse)
             Padding(
@@ -4049,1652 +7452,642 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 ),
               ),
             ),
-          // 컴팩트 뷰 전환 (연결됐을 때만)
-          if (_isConnected)
-            IconButton(
-              icon: Icon(
-                _isCompactView ? Icons.fullscreen : Icons.compress,
-                size: 22,
-              ),
-              tooltip: _isCompactView ? '전체 화면으로' : '컴팩트 보기 (메시지 크게)',
-              onPressed: () {
-                setState(() => _isCompactView = !_isCompactView);
-              },
-            ),
           // 설정 버튼
           IconButton(
             icon: const Icon(Icons.settings_outlined),
-            tooltip: '설정',
+            tooltip: _selectedHomeTab == HomeTab.settings ? '전체 설정' : '설정 탭',
             onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => const SettingsPage(),
+              if (_selectedHomeTab == HomeTab.settings) {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                  builder: (context) => SettingsPage(
+                    isDemoMode: _isDemoMode,
+                    onExitDemoMode: widget.onExitDemoMode,
+                    onEnterDemoMode: widget.onEnterDemoMode,
+                  ),
                 ),
               );
+                return;
+              }
+              unawaited(_selectHomeTab(HomeTab.settings));
             },
           ),
         ],
       ),
-      body: _isCompactView && _isConnected
-          ? _buildCompactBody()
-          : Column(
-              children: [
-                // 최상단: 연결 상태 및 설정 카드
-                Container(
-                  margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-                  child: Card(
-                    child: ExpansionTile(
-                      controller: _expansionTileController,
-                      leading: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: _isConnected
-                              ? Theme.of(context).colorScheme.primaryContainer
-                              : Theme.of(context)
-                                  .colorScheme
-                                  .surfaceContainerHighest,
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          _isConnected ? Icons.cloud_done : Icons.cloud_off,
-                          color: _isConnected
-                              ? Theme.of(context).colorScheme.onPrimaryContainer
-                              : Theme.of(context).colorScheme.onSurfaceVariant,
-                          size: 20,
-                        ),
-                      ),
-                      title: Text(
-                        _isConnected ? '연결됨' : '연결 안 됨',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          color: _isConnected
-                              ? Theme.of(context).colorScheme.primary
-                              : Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                      subtitle: Text(
-                        _isConnected
-                            ? (_connectionType == ConnectionType.local
-                                ? '로컬 서버 모드'
-                                : (_sessionId != null
-                                    ? '릴레이 모드 • 세션: $_sessionId'
-                                    : '릴레이 모드'))
-                            : '연결을 설정하세요',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                      initiallyExpanded: !_isConnected, // 연결 안 됨일 때만 펼침
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              // 연결 타입 선택
-                              Text(
-                                '연결 타입',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                  color:
-                                      Theme.of(context).colorScheme.onSurface,
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              SegmentedButton<ConnectionType>(
-                                segments: const [
-                                  ButtonSegment<ConnectionType>(
-                                    value: ConnectionType.local,
-                                    label: Text('로컬 서버'),
-                                    icon: Icon(Icons.computer, size: 18),
-                                  ),
-                                  ButtonSegment<ConnectionType>(
-                                    value: ConnectionType.relay,
-                                    label: Text('릴레이 서버'),
-                                    icon: Icon(Icons.cloud, size: 18),
-                                  ),
-                                ],
-                                selected: {_connectionType},
-                                onSelectionChanged: _isConnected
-                                    ? null
-                                    : (Set<ConnectionType> newSelection) {
-                                        setState(() {
-                                          _connectionType = newSelection.first;
-                                        });
-                                      },
-                              ),
-                              const SizedBox(height: 16),
-                              // 로컬 서버 연결 UI
-                              if (_connectionType == ConnectionType.local) ...[
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: TextField(
-                                        controller: _localIpController,
-                                        focusNode: _localIpFocusNode,
-                                        decoration: const InputDecoration(
-                                          labelText:
-                                              'PC IP (Extension이 실행 중인 PC)',
-                                          hintText: '192.168.0.10',
-                                          border: OutlineInputBorder(),
-                                          isDense: true,
-                                          contentPadding: EdgeInsets.all(12),
-                                          prefixIcon: Icon(Icons.computer),
-                                          helperText:
-                                              '이전에 사용한 IP 주소가 자동으로 표시됩니다',
-                                        ),
-                                        enabled: !_isConnected,
-                                        keyboardType: TextInputType.number,
-                                        textInputAction: TextInputAction.next,
-                                        onSubmitted: (value) {
-                                          if (!_isConnected) {
-                                            _connect();
-                                          }
-                                        },
-                                        onChanged: (value) {
-                                          if (value.trim().isNotEmpty) {
-                                            _saveConnectionSettings();
-                                          }
-                                        },
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    SizedBox(
-                                      width: 110,
-                                      child: TextField(
-                                        controller: _localPortController,
-                                        decoration: const InputDecoration(
-                                          labelText: '포트',
-                                          hintText: '8766',
-                                          border: OutlineInputBorder(),
-                                          isDense: true,
-                                          contentPadding: EdgeInsets.all(12),
-                                        ),
-                                        enabled: !_isConnected,
-                                        keyboardType: TextInputType.number,
-                                        textInputAction: TextInputAction.done,
-                                        onSubmitted: (value) {
-                                          if (!_isConnected) {
-                                            _connect();
-                                          }
-                                        },
-                                        onChanged: (value) {
-                                          if (value.trim().isNotEmpty) {
-                                            _saveConnectionSettings();
-                                          }
-                                        },
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 8),
-                                Container(
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .tertiaryContainer
-                                        .withOpacity(0.5),
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .tertiary
-                                          .withOpacity(0.3),
-                                      width: 1,
-                                    ),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Icon(Icons.info_outline,
-                                          size: 18,
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .tertiary),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(
-                                          'PC와 모바일이 같은 네트워크에 있어야 합니다 (기본 포트 8766)',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w500,
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .onSurface,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ] else ...[
-                                // 릴레이 서버 연결 UI
-                                TextField(
-                                  controller: _sessionIdController,
-                                  focusNode: _sessionIdFocusNode,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Session ID (PC에서 먼저 생성·연결한 ID)',
-                                    hintText: 'ABC123',
-                                    border: OutlineInputBorder(),
-                                    isDense: true,
-                                    contentPadding: EdgeInsets.all(12),
-                                    prefixIcon: Icon(Icons.cloud),
-                                    helperText:
-                                        'PC(익스텐션) 상태줄 클릭 → 세션 ID 생성 후 같은 ID 입력',
-                                  ),
-                                  enabled: !_isConnected,
-                                  keyboardType: TextInputType.text,
-                                  textCapitalization:
-                                      TextCapitalization.characters,
-                                  textInputAction: TextInputAction.done,
-                                  onSubmitted: (value) {
-                                    if (!_isConnected) {
-                                      _connect();
-                                    }
-                                  },
-                                ),
-                                const SizedBox(height: 8),
-                                Container(
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context)
+      body: _wrapWithDemoModeGuide(
+        _selectedHomeTab == HomeTab.chat
+            ? (_isCompactView && _isConnected
+                ? _buildChatGptLikeBody()
+                : Column(
+                    children: [
+                      // 최상단: 연결 상태 및 설정 카드
+                      Container(
+                        margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                        child: Card(
+                          child: ExpansionTile(
+                            controller: _expansionTileController,
+                            leading: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: _isConnected
+                                    ? Theme.of(context)
                                         .colorScheme
                                         .primaryContainer
-                                        .withOpacity(0.5),
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .primary
-                                          .withOpacity(0.2),
-                                      width: 1,
-                                    ),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Icon(Icons.info_outline,
-                                          size: 18,
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .primary),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(
-                                          '먼저 PC(익스텐션)에서 상태줄을 클릭해 세션 ID를 생성·연결한 뒤, 여기에 같은 ID를 입력하세요.',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w500,
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .onSurface,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                              const SizedBox(height: 12),
-                              // 최근 연결 목록
-                              if (!_isConnected &&
-                                  AppSettings()
-                                      .connectionHistory
-                                      .isNotEmpty) ...[
-                                Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
+                                    : Theme.of(context)
+                                        .colorScheme
+                                        .surfaceContainerHighest,
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                _isConnected
+                                    ? Icons.cloud_done
+                                    : Icons.cloud_off,
+                                color: _isConnected
+                                    ? Theme.of(context)
+                                        .colorScheme
+                                        .onPrimaryContainer
+                                    : Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                                size: 20,
+                              ),
+                            ),
+                            title: Text(
+                              _isConnected ? '연결됨' : '연결 안 됨',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                color: _isConnected
+                                    ? Theme.of(context).colorScheme.primary
+                                    : Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                              ),
+                            ),
+                            subtitle: Text(
+                              _isConnected
+                                  ? (_connectionType == ConnectionType.local
+                                      ? '로컬 서버 모드'
+                                      : (_sessionId != null
+                                          ? '릴레이 모드 • 세션: $_sessionId'
+                                          : '릴레이 모드'))
+                                  : '연결을 설정하세요',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                              ),
+                            ),
+                            initiallyExpanded: !_isConnected, // 연결 안 됨일 때만 펼침
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.all(16.0),
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
                                   children: [
-                                    Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          '최근 연결',
-                                          style: TextStyle(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.w600,
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .onSurface,
-                                          ),
+                                    // 연결 타입 선택
+                                    Text(
+                                      '연결 타입',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurface,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 12),
+                                    SegmentedButton<ConnectionType>(
+                                      segments: const [
+                                        ButtonSegment<ConnectionType>(
+                                          value: ConnectionType.local,
+                                          label: Text('로컬 서버'),
+                                          icon: Icon(Icons.computer, size: 18),
                                         ),
-                                        Text(
-                                          '탭하면 재연결됩니다',
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .onSurfaceVariant,
-                                          ),
+                                        ButtonSegment<ConnectionType>(
+                                          value: ConnectionType.relay,
+                                          label: Text('릴레이 서버'),
+                                          icon: Icon(Icons.cloud, size: 18),
                                         ),
                                       ],
+                                      selected: {_connectionType},
+                                      onSelectionChanged: _isConnected
+                                          ? null
+                                          : (Set<ConnectionType> newSelection) {
+                                              setState(() {
+                                                _connectionType =
+                                                    newSelection.first;
+                                              });
+                                            },
                                     ),
-                                    TextButton.icon(
-                                      onPressed: () async {
-                                        final confirm = await showDialog<bool>(
-                                          context: context,
-                                          builder: (ctx) => AlertDialog(
-                                            title: const Text('전체 삭제'),
-                                            content: const Text(
-                                              '최근 연결 목록을 모두 삭제하시겠습니까?',
-                                            ),
-                                            actions: [
-                                              TextButton(
-                                                onPressed: () =>
-                                                    Navigator.of(ctx)
-                                                        .pop(false),
-                                                child: const Text('취소'),
-                                              ),
-                                              TextButton(
-                                                onPressed: () =>
-                                                    Navigator.of(ctx).pop(true),
-                                                child: const Text('전체 삭제'),
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                        if (confirm == true) {
-                                          await AppSettings()
-                                              .clearConnectionHistory();
-                                        }
-                                      },
-                                      icon: const Icon(Icons.delete_sweep,
-                                          size: 18),
-                                      label: const Text('전체 삭제'),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 8),
-                                Container(
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .surfaceContainerHighest
-                                        .withOpacity(0.5),
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .outline
-                                          .withOpacity(0.2),
-                                      width: 1,
-                                    ),
-                                  ),
-                                  child: Column(
-                                    children: AppSettings()
-                                        .connectionHistory
-                                        .asMap()
-                                        .entries
-                                        .map((entry) {
-                                      final index = entry.key;
-                                      final item = entry.value;
-                                      final isLast = index ==
-                                          AppSettings()
-                                                  .connectionHistory
-                                                  .length -
-                                              1;
-                                      return Column(
+                                    const SizedBox(height: 16),
+                                    // 로컬 서버 연결 UI
+                                    if (_connectionType ==
+                                        ConnectionType.local) ...[
+                                      Row(
                                         children: [
-                                          Tooltip(
-                                            message: '탭하여 재연결',
-                                            child: InkWell(
-                                              onTap: () =>
-                                                  _connectFromHistory(item),
-                                              borderRadius:
-                                                  BorderRadius.vertical(
-                                                top: index == 0
-                                                    ? const Radius.circular(12)
-                                                    : Radius.zero,
-                                                bottom: isLast
-                                                    ? const Radius.circular(12)
-                                                    : Radius.zero,
+                                          Expanded(
+                                            child: TextField(
+                                              controller: _localIpController,
+                                              focusNode: _localIpFocusNode,
+                                              decoration: const InputDecoration(
+                                                labelText:
+                                                    'PC IP (Extension이 실행 중인 PC)',
+                                                hintText: '192.168.0.10',
+                                                border: OutlineInputBorder(),
+                                                isDense: true,
+                                                contentPadding:
+                                                    EdgeInsets.all(12),
+                                                prefixIcon:
+                                                    Icon(Icons.computer),
+                                                helperText:
+                                                    '이전에 사용한 IP 주소가 자동으로 표시됩니다',
                                               ),
-                                              child: Padding(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                        horizontal: 12,
-                                                        vertical: 10),
-                                                child: Row(
-                                                  children: [
-                                                    Container(
-                                                      padding:
-                                                          const EdgeInsets.all(
-                                                              6),
-                                                      decoration: BoxDecoration(
-                                                        color: item.type ==
-                                                                ConnectionType
-                                                                    .local
-                                                            ? Theme.of(context)
-                                                                .colorScheme
-                                                                .secondaryContainer
-                                                            : Theme.of(context)
-                                                                .colorScheme
-                                                                .primaryContainer,
-                                                        borderRadius:
-                                                            BorderRadius
-                                                                .circular(6),
-                                                      ),
-                                                      child: Icon(
-                                                        item.type ==
-                                                                ConnectionType
-                                                                    .local
-                                                            ? Icons.computer
-                                                            : Icons.cloud,
-                                                        size: 14,
-                                                        color: item.type ==
-                                                                ConnectionType
-                                                                    .local
-                                                            ? Theme.of(context)
-                                                                .colorScheme
-                                                                .onSecondaryContainer
-                                                            : Theme.of(context)
-                                                                .colorScheme
-                                                                .onPrimaryContainer,
-                                                      ),
-                                                    ),
-                                                    const SizedBox(width: 10),
-                                                    Expanded(
-                                                      child: Column(
-                                                        crossAxisAlignment:
-                                                            CrossAxisAlignment
-                                                                .start,
-                                                        children: [
-                                                          Text(
-                                                            item.displayText,
-                                                            style: TextStyle(
-                                                              fontSize: 13,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w500,
-                                                              color: Theme.of(
-                                                                      context)
-                                                                  .colorScheme
-                                                                  .onSurface,
-                                                              fontFamily:
-                                                                  'monospace',
-                                                            ),
-                                                          ),
-                                                          Text(
-                                                            item.relativeTime,
-                                                            style: TextStyle(
-                                                              fontSize: 11,
-                                                              color: Theme.of(
-                                                                      context)
-                                                                  .colorScheme
-                                                                  .onSurfaceVariant,
-                                                            ),
-                                                          ),
-                                                        ],
-                                                      ),
-                                                    ),
-                                                    Icon(
-                                                      Icons.settings_ethernet,
-                                                      size: 20,
-                                                      color: Theme.of(context)
-                                                          .colorScheme
-                                                          .primary,
-                                                    ),
-                                                    const SizedBox(width: 4),
-                                                    IconButton(
-                                                      icon: Icon(
-                                                        Icons.delete_outline,
-                                                        size: 20,
-                                                        color: Theme.of(context)
-                                                            .colorScheme
-                                                            .error,
-                                                      ),
-                                                      onPressed: () async {
-                                                        final confirm =
-                                                            await showDialog<
-                                                                bool>(
-                                                          context: context,
-                                                          builder: (ctx) =>
-                                                              AlertDialog(
-                                                            title: const Text(
-                                                                '연결 삭제'),
-                                                            content: Text(
-                                                              '${item.displayText} 항목을 삭제하시겠습니까?',
-                                                            ),
-                                                            actions: [
-                                                              TextButton(
-                                                                onPressed: () =>
-                                                                    Navigator.of(
-                                                                            ctx)
-                                                                        .pop(
-                                                                            false),
-                                                                child:
-                                                                    const Text(
-                                                                        '취소'),
-                                                              ),
-                                                              TextButton(
-                                                                onPressed: () =>
-                                                                    Navigator.of(
-                                                                            ctx)
-                                                                        .pop(
-                                                                            true),
-                                                                child:
-                                                                    const Text(
-                                                                        '삭제'),
-                                                              ),
-                                                            ],
-                                                          ),
-                                                        );
-                                                        if (confirm == true) {
-                                                          await AppSettings()
-                                                              .removeConnectionHistory(
-                                                                  item);
-                                                        }
-                                                      },
-                                                      padding: EdgeInsets.zero,
-                                                      constraints:
-                                                          const BoxConstraints(
-                                                              minWidth: 32,
-                                                              minHeight: 32),
-                                                    ),
-                                                  ],
+                                              enabled: !_isConnected,
+                                              keyboardType:
+                                                  TextInputType.number,
+                                              textInputAction:
+                                                  TextInputAction.next,
+                                              onSubmitted: (value) {
+                                                if (!_isConnected) {
+                                                  unawaited(_connect());
+                                                }
+                                              },
+                                              onChanged: (value) {
+                                                if (value.trim().isNotEmpty) {
+                                                  _saveConnectionSettings();
+                                                }
+                                              },
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          SizedBox(
+                                            width: 110,
+                                            child: TextField(
+                                              controller: _localPortController,
+                                              decoration: const InputDecoration(
+                                                labelText: '포트',
+                                                hintText: '8766',
+                                                border: OutlineInputBorder(),
+                                                isDense: true,
+                                                contentPadding:
+                                                    EdgeInsets.all(12),
+                                              ),
+                                              enabled: !_isConnected,
+                                              keyboardType:
+                                                  TextInputType.number,
+                                              textInputAction:
+                                                  TextInputAction.done,
+                                              onSubmitted: (value) {
+                                                if (!_isConnected) {
+                                                  unawaited(_connect());
+                                                }
+                                              },
+                                              onChanged: (value) {
+                                                if (value.trim().isNotEmpty) {
+                                                  _saveConnectionSettings();
+                                                }
+                                              },
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Container(
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .tertiaryContainer
+                                              .withOpacity(0.5),
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                          border: Border.all(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .tertiary
+                                                .withOpacity(0.3),
+                                            width: 1,
+                                          ),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Icon(Icons.info_outline,
+                                                size: 18,
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .tertiary),
+                                            const SizedBox(width: 8),
+                                            Expanded(
+                                              child: Text(
+                                                'PC와 모바일이 같은 네트워크에 있어야 합니다 (기본 포트 8766)',
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w500,
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurface,
                                                 ),
                                               ),
                                             ),
-                                          ),
-                                          if (!isLast)
-                                            Divider(
-                                              height: 1,
-                                              indent: 12,
-                                              endIndent: 12,
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .outline
-                                                  .withOpacity(0.2),
-                                            ),
-                                        ],
-                                      );
-                                    }).toList(),
-                                  ),
-                                ),
-                                const SizedBox(height: 16),
-                              ],
-                              // 재연결 중 상태 표시
-                              if (_isReconnecting) ...[
-                                Container(
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .tertiaryContainer
-                                        .withOpacity(0.5),
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .tertiary
-                                          .withOpacity(0.3),
-                                      width: 1,
-                                    ),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      SizedBox(
-                                        width: 16,
-                                        height: 16,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          valueColor:
-                                              AlwaysStoppedAnimation<Color>(
-                                            Theme.of(context)
-                                                .colorScheme
-                                                .tertiary,
-                                          ),
+                                          ],
                                         ),
                                       ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Text(
-                                          '재연결 시도 중... ($_reconnectAttempts회)',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w500,
+                                    ] else ...[
+                                      // 릴레이 서버 연결 UI
+                                      TextField(
+                                        controller: _sessionIdController,
+                                        focusNode: _sessionIdFocusNode,
+                                        decoration: const InputDecoration(
+                                          labelText:
+                                              'Session ID (PC에서 먼저 생성·연결한 ID)',
+                                          hintText: 'ABC123',
+                                          border: OutlineInputBorder(),
+                                          isDense: true,
+                                          contentPadding: EdgeInsets.all(12),
+                                          prefixIcon: Icon(Icons.cloud),
+                                          helperText:
+                                              'PC(익스텐션) 상태줄 클릭 → 세션 ID 생성 후 같은 ID 입력',
+                                        ),
+                                        enabled: !_isConnected,
+                                        keyboardType: TextInputType.text,
+                                        textCapitalization:
+                                            TextCapitalization.characters,
+                                        textInputAction: TextInputAction.done,
+                                        onSubmitted: (value) {
+                                          if (!_isConnected) {
+                                            unawaited(_connect());
+                                          }
+                                        },
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Container(
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .primaryContainer
+                                              .withOpacity(0.5),
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                          border: Border.all(
                                             color: Theme.of(context)
                                                 .colorScheme
-                                                .onSurface,
+                                                .primary
+                                                .withOpacity(0.2),
+                                            width: 1,
                                           ),
                                         ),
-                                      ),
-                                      TextButton(
-                                        onPressed: _stopReconnect,
-                                        child: const Text('취소',
-                                            style: TextStyle(fontSize: 12)),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                              ],
-                              // 연결 에러 표시
-                              if (_lastConnectionError != null &&
-                                  !_isConnected &&
-                                  !_isReconnecting) ...[
-                                Container(
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .errorContainer
-                                        .withOpacity(0.3),
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .error
-                                          .withOpacity(0.2),
-                                      width: 1,
-                                    ),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        Icons.error_outline,
-                                        size: 20,
-                                        color:
-                                            Theme.of(context).colorScheme.error,
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Text(
-                                          '연결 실패: ${_lastConnectionError!.length > 50 ? '${_lastConnectionError!.substring(0, 50)}...' : _lastConnectionError}',
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.w500,
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .onErrorContainer,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                              ],
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceEvenly,
-                                children: [
-                                  Expanded(
-                                    child: FilledButton.icon(
-                                      onPressed: _isConnected || _isReconnecting
-                                          ? null
-                                          : _connect,
-                                      icon: Icon(
-                                        _connectionType == ConnectionType.local
-                                            ? Icons.computer
-                                            : Icons.cloud,
-                                        size: 18,
-                                      ),
-                                      label: Text(
-                                        _connectionType == ConnectionType.local
-                                            ? '연결'
-                                            : (_sessionIdController.text
-                                                    .trim()
-                                                    .isEmpty
-                                                ? '생성 & 연결'
-                                                : '연결'),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  if (!_isConnected &&
-                                      _lastConnectionError != null) ...[
-                                    Expanded(
-                                      child: OutlinedButton.icon(
-                                        onPressed: _isReconnecting
-                                            ? null
-                                            : _manualReconnect,
-                                        icon:
-                                            const Icon(Icons.refresh, size: 18),
-                                        label: const Text('재연결'),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                  ],
-                                  Expanded(
-                                    child: OutlinedButton(
-                                      onPressed:
-                                          _isConnected ? _disconnect : null,
-                                      child: const Text('연결 해제'),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              // 연결 상태 표시
-                              if (_isConnected) ...[
-                                const SizedBox(height: 12),
-                                Container(
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .primaryContainer
-                                        .withOpacity(0.3),
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .primary
-                                          .withOpacity(0.2),
-                                      width: 1,
-                                    ),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        Icons.check_circle,
-                                        size: 20,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .primary,
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
+                                        child: Row(
                                           children: [
-                                            Text(
-                                              _connectionType ==
-                                                      ConnectionType.local
-                                                  ? '로컬 서버에 연결됨'
-                                                  : '릴레이 서버에 연결됨',
-                                              style: TextStyle(
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.w600,
+                                            Icon(Icons.info_outline,
+                                                size: 18,
                                                 color: Theme.of(context)
                                                     .colorScheme
-                                                    .onSurface,
+                                                    .primary),
+                                            const SizedBox(width: 8),
+                                            Expanded(
+                                              child: Text(
+                                                '먼저 PC(익스텐션)에서 상태줄을 클릭해 세션 ID를 생성·연결한 뒤, 여기에 같은 ID를 입력하세요.',
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w500,
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurface,
+                                                ),
                                               ),
                                             ),
-                                            if (_connectionType ==
-                                                    ConnectionType.relay &&
-                                                _sessionId != null) ...[
-                                              const SizedBox(height: 4),
-                                              Row(
-                                                children: [
-                                                  Expanded(
-                                                    child: Text(
-                                                      '세션 ID: $_sessionId',
-                                                      style: TextStyle(
-                                                        fontSize: 12,
-                                                        fontWeight:
-                                                            FontWeight.w500,
-                                                        color: Theme.of(context)
-                                                            .colorScheme
-                                                            .onSurfaceVariant,
-                                                        fontFamily: 'monospace',
-                                                      ),
-                                                    ),
-                                                  ),
-                                                  IconButton(
-                                                    icon: const Icon(Icons.copy,
-                                                        size: 16),
-                                                    padding: EdgeInsets.zero,
-                                                    constraints:
-                                                        const BoxConstraints(),
-                                                    onPressed: () {
-                                                      Clipboard.setData(
-                                                          ClipboardData(
-                                                              text:
-                                                                  _sessionId!));
-                                                      ScaffoldMessenger.of(
-                                                              context)
-                                                          .showSnackBar(
-                                                        const SnackBar(
-                                                          content: Text(
-                                                              '세션 ID가 클립보드에 복사되었습니다'),
-                                                          duration: Duration(
-                                                              seconds: 1),
-                                                        ),
-                                                      );
-                                                    },
-                                                  ),
-                                                ],
-                                              ),
-                                            ],
                                           ],
                                         ),
                                       ),
                                     ],
-                                  ),
-                                ),
-                              ] else if (!_isConnected && !_isReconnecting) ...[
-                                const SizedBox(height: 12),
-                                Container(
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .surfaceContainerHighest
-                                        .withOpacity(0.5),
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .outline
-                                          .withOpacity(0.2),
-                                      width: 1,
-                                    ),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        Icons.cloud_off,
-                                        size: 20,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .onSurfaceVariant,
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Text(
-                                          '연결되지 않음',
-                                          style: TextStyle(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.w500,
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .onSurfaceVariant,
+                                    const SizedBox(height: 12),
+                                    // 최근 연결 목록
+                                    if (!_isConnected &&
+                                        AppSettings()
+                                            .connectionHistory
+                                            .isNotEmpty) ...[
+                                      Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                '최근 연결',
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurface,
+                                                ),
+                                              ),
+                                              Text(
+                                                '탭하면 재연결됩니다',
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurfaceVariant,
+                                                ),
+                                              ),
+                                            ],
                                           ),
-                                        ),
+                                          TextButton.icon(
+                                            onPressed: () async {
+                                              final confirm =
+                                                  await showDialog<bool>(
+                                                context: context,
+                                                builder: (ctx) => AlertDialog(
+                                                  title: const Text('전체 삭제'),
+                                                  content: const Text(
+                                                    '최근 연결 목록을 모두 삭제하시겠습니까?',
+                                                  ),
+                                                  actions: [
+                                                    TextButton(
+                                                      onPressed: () =>
+                                                          Navigator.of(ctx)
+                                                              .pop(false),
+                                                      child: const Text('취소'),
+                                                    ),
+                                                    TextButton(
+                                                      onPressed: () =>
+                                                          Navigator.of(ctx)
+                                                              .pop(true),
+                                                      child:
+                                                          const Text('전체 삭제'),
+                                                    ),
+                                                  ],
+                                                ),
+                                              );
+                                              if (confirm == true) {
+                                                await AppSettings()
+                                                    .clearConnectionHistory();
+                                              }
+                                            },
+                                            icon: const Icon(Icons.delete_sweep,
+                                                size: 18),
+                                            label: const Text('전체 삭제'),
+                                          ),
+                                        ],
                                       ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                // 가운데: 메시지 로그 (가장 많은 공간 차지)
-                Expanded(
-                  child: Card(
-                    margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        // Messages 헤더 및 필터
-                        Padding(
-                          padding: const EdgeInsets.all(12.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Icon(
-                                        Icons.chat_bubble_outline,
-                                        size: 20,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .primary,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        '메시지',
-                                        style: TextStyle(
-                                          fontSize: 18,
-                                          fontWeight: FontWeight.w600,
+                                      const SizedBox(height: 8),
+                                      Container(
+                                        decoration: BoxDecoration(
                                           color: Theme.of(context)
                                               .colorScheme
-                                              .onSurface,
+                                              .surfaceContainerHighest
+                                              .withOpacity(0.5),
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                          border: Border.all(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .outline
+                                                .withOpacity(0.2),
+                                            width: 1,
+                                          ),
+                                        ),
+                                        child: Column(
+                                          children: AppSettings()
+                                              .connectionHistory
+                                              .asMap()
+                                              .entries
+                                              .map((entry) {
+                                            final index = entry.key;
+                                            final item = entry.value;
+                                            final isLast = index ==
+                                                AppSettings()
+                                                        .connectionHistory
+                                                        .length -
+                                                    1;
+                                            return Column(
+                                              children: [
+                                                Tooltip(
+                                                  message: '탭하여 재연결',
+                                                  child: InkWell(
+                                                    onTap: () =>
+                                                        _connectFromHistory(
+                                                            item),
+                                                    borderRadius:
+                                                        BorderRadius.vertical(
+                                                      top: index == 0
+                                                          ? const Radius
+                                                              .circular(12)
+                                                          : Radius.zero,
+                                                      bottom: isLast
+                                                          ? const Radius
+                                                              .circular(12)
+                                                          : Radius.zero,
+                                                    ),
+                                                    child: Padding(
+                                                      padding: const EdgeInsets
+                                                          .symmetric(
+                                                          horizontal: 12,
+                                                          vertical: 10),
+                                                      child: Row(
+                                                        children: [
+                                                          Container(
+                                                            padding:
+                                                                const EdgeInsets
+                                                                    .all(6),
+                                                            decoration:
+                                                                BoxDecoration(
+                                                              color: item.type ==
+                                                                      ConnectionType
+                                                                          .local
+                                                                  ? Theme.of(
+                                                                          context)
+                                                                      .colorScheme
+                                                                      .secondaryContainer
+                                                                  : Theme.of(
+                                                                          context)
+                                                                      .colorScheme
+                                                                      .primaryContainer,
+                                                              borderRadius:
+                                                                  BorderRadius
+                                                                      .circular(
+                                                                          6),
+                                                            ),
+                                                            child: Icon(
+                                                              item.type ==
+                                                                      ConnectionType
+                                                                          .local
+                                                                  ? Icons
+                                                                      .computer
+                                                                  : Icons.cloud,
+                                                              size: 14,
+                                                              color: item.type ==
+                                                                      ConnectionType
+                                                                          .local
+                                                                  ? Theme.of(
+                                                                          context)
+                                                                      .colorScheme
+                                                                      .onSecondaryContainer
+                                                                  : Theme.of(
+                                                                          context)
+                                                                      .colorScheme
+                                                                      .onPrimaryContainer,
+                                                            ),
+                                                          ),
+                                                          const SizedBox(
+                                                              width: 10),
+                                                          Expanded(
+                                                            child: Column(
+                                                              crossAxisAlignment:
+                                                                  CrossAxisAlignment
+                                                                      .start,
+                                                              children: [
+                                                                Text(
+                                                                  item.displayText,
+                                                                  style:
+                                                                      TextStyle(
+                                                                    fontSize:
+                                                                        13,
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .w500,
+                                                                    color: Theme.of(
+                                                                            context)
+                                                                        .colorScheme
+                                                                        .onSurface,
+                                                                    fontFamily:
+                                                                        'monospace',
+                                                                  ),
+                                                                ),
+                                                                Text(
+                                                                  item.relativeTime,
+                                                                  style:
+                                                                      TextStyle(
+                                                                    fontSize:
+                                                                        11,
+                                                                    color: Theme.of(
+                                                                            context)
+                                                                        .colorScheme
+                                                                        .onSurfaceVariant,
+                                                                  ),
+                                                                ),
+                                                              ],
+                                                            ),
+                                                          ),
+                                                          Icon(
+                                                            Icons
+                                                                .settings_ethernet,
+                                                            size: 20,
+                                                            color: Theme.of(
+                                                                    context)
+                                                                .colorScheme
+                                                                .primary,
+                                                          ),
+                                                          const SizedBox(
+                                                              width: 4),
+                                                          IconButton(
+                                                            icon: Icon(
+                                                              Icons
+                                                                  .delete_outline,
+                                                              size: 20,
+                                                              color: Theme.of(
+                                                                      context)
+                                                                  .colorScheme
+                                                                  .error,
+                                                            ),
+                                                            onPressed:
+                                                                () async {
+                                                              final confirm =
+                                                                  await showDialog<
+                                                                      bool>(
+                                                                context:
+                                                                    context,
+                                                                builder: (ctx) =>
+                                                                    AlertDialog(
+                                                                  title: const Text(
+                                                                      '연결 삭제'),
+                                                                  content: Text(
+                                                                    '${item.displayText} 항목을 삭제하시겠습니까?',
+                                                                  ),
+                                                                  actions: [
+                                                                    TextButton(
+                                                                      onPressed:
+                                                                          () =>
+                                                                              Navigator.of(ctx).pop(false),
+                                                                      child: const Text(
+                                                                          '취소'),
+                                                                    ),
+                                                                    TextButton(
+                                                                      onPressed:
+                                                                          () =>
+                                                                              Navigator.of(ctx).pop(true),
+                                                                      child: const Text(
+                                                                          '삭제'),
+                                                                    ),
+                                                                  ],
+                                                                ),
+                                                              );
+                                                              if (confirm ==
+                                                                  true) {
+                                                                await AppSettings()
+                                                                    .removeConnectionHistory(
+                                                                        item);
+                                                              }
+                                                            },
+                                                            padding:
+                                                                EdgeInsets.zero,
+                                                            constraints:
+                                                                const BoxConstraints(
+                                                                    minWidth:
+                                                                        32,
+                                                                    minHeight:
+                                                                        32),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                                if (!isLast)
+                                                  Divider(
+                                                    height: 1,
+                                                    indent: 12,
+                                                    endIndent: 12,
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .outline
+                                                        .withOpacity(0.2),
+                                                  ),
+                                              ],
+                                            );
+                                          }).toList(),
                                         ),
                                       ),
+                                      const SizedBox(height: 16),
                                     ],
-                                  ),
-                                  // 표시/전체, 과거 메시지 불러오기 - 잠시 숨김
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              // 검색: 범위(전체/답변만) + 입력창
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.center,
-                                children: [
-                                  ConstrainedBox(
-                                    constraints:
-                                        const BoxConstraints(minWidth: 200),
-                                    child: SegmentedButton<String>(
-                                      segments: const [
-                                        ButtonSegment<String>(
-                                          value: _searchScopeAll,
-                                          label: Text('전체',
-                                              softWrap: false,
-                                              overflow: TextOverflow.clip),
-                                          icon: Icon(Icons.chat, size: 14),
-                                        ),
-                                        ButtonSegment<String>(
-                                          value: _searchScopeAnswerOnly,
-                                          label: Text('답변만',
-                                              softWrap: false,
-                                              overflow: TextOverflow.clip),
-                                          icon: Icon(Icons.smart_toy, size: 14),
-                                        ),
-                                      ],
-                                      selected: {_searchScope},
-                                      onSelectionChanged: (Set<String> s) {
-                                        setState(() => _searchScope = s.first);
-                                      },
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: TextField(
-                                      onChanged: (v) =>
-                                          setState(() => _searchQuery = v),
-                                      decoration: InputDecoration(
-                                        hintText: '메시지 검색',
-                                        isDense: true,
-                                        contentPadding:
-                                            const EdgeInsets.symmetric(
-                                                horizontal: 12, vertical: 8),
-                                        prefixIcon:
-                                            const Icon(Icons.search, size: 20),
-                                        suffixIcon: _searchQuery.isNotEmpty
-                                            ? IconButton(
-                                                icon: const Icon(Icons.clear,
-                                                    size: 18),
-                                                onPressed: () => setState(
-                                                    () => _searchQuery = ''),
-                                              )
-                                            : null,
-                                        border: OutlineInputBorder(
+                                    // 재연결 중 상태 표시
+                                    if (_isReconnecting) ...[
+                                      Container(
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .tertiaryContainer
+                                              .withOpacity(0.5),
                                           borderRadius:
                                               BorderRadius.circular(8),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              // 필터 칩들
-                              Wrap(
-                                spacing: 8.0,
-                                runSpacing: 4.0,
-                                children: [
-                                  FilterChip(
-                                    label: _buildFilterChipLabel(
-                                      icon: Icons.smart_toy,
-                                      text: 'AI Response',
-                                      textColor: (_activeFilters[
-                                                  MessageFilter.aiResponse] ??
-                                              true)
-                                          ? Theme.of(context)
-                                              .colorScheme
-                                              .onTertiaryContainer
-                                          : Theme.of(context)
-                                              .colorScheme
-                                              .onSurface,
-                                    ),
-                                    selected: _activeFilters[
-                                            MessageFilter.aiResponse] ??
-                                        true,
-                                    selectedColor: Theme.of(context)
-                                        .colorScheme
-                                        .tertiaryContainer,
-                                    checkmarkColor:
-                                        Theme.of(context).colorScheme.tertiary,
-                                    onSelected: (selected) {
-                                      setState(() {
-                                        _activeFilters[MessageFilter
-                                            .aiResponse] = selected;
-                                      });
-                                    },
-                                  ),
-                                  FilterChip(
-                                    label: _buildFilterChipLabel(
-                                      icon: Icons.person,
-                                      text: 'User Prompt',
-                                      textColor: (_activeFilters[
-                                                  MessageFilter.userPrompt] ??
-                                              true)
-                                          ? Theme.of(context)
-                                              .colorScheme
-                                              .onSecondaryContainer
-                                          : Theme.of(context)
-                                              .colorScheme
-                                              .onSurface,
-                                    ),
-                                    selected: _activeFilters[
-                                            MessageFilter.userPrompt] ??
-                                        true,
-                                    selectedColor: Theme.of(context)
-                                        .colorScheme
-                                        .secondaryContainer,
-                                    checkmarkColor:
-                                        Theme.of(context).colorScheme.secondary,
-                                    onSelected: (selected) {
-                                      setState(() {
-                                        _activeFilters[MessageFilter
-                                            .userPrompt] = selected;
-                                      });
-                                    },
-                                  ),
-                                  FilterChip(
-                                    label: _buildFilterChipLabel(
-                                      icon: Icons.bug_report,
-                                      text: 'Logs',
-                                      textColor:
-                                          (_activeFilters[MessageFilter.log] ??
-                                                  false)
-                                              ? const Color(0xFF7A4B00)
-                                              : Theme.of(context)
-                                                  .colorScheme
-                                                  .onSurface,
-                                      iconColor:
-                                          (_activeFilters[MessageFilter.log] ??
-                                                  false)
-                                              ? const Color(0xFFFF9800)
-                                              : Theme.of(context)
-                                                  .colorScheme
-                                                  .onSurfaceVariant,
-                                    ),
-                                    selected:
-                                        _activeFilters[MessageFilter.log] ??
-                                            false,
-                                    selectedColor:
-                                        const Color(0xFFFFF3E0), // 오렌지 배경
-                                    checkmarkColor:
-                                        const Color(0xFFFF9800), // 오렌지
-                                    onSelected: (selected) {
-                                      setState(() {
-                                        _activeFilters[MessageFilter.log] =
-                                            selected;
-                                        // 로그 필터 활성화 시 레벨 필터 모두 체크
-                                        if (selected) {
-                                          _logLevelFilters[LogLevel.error] =
-                                              true;
-                                          _logLevelFilters[LogLevel.warning] =
-                                              true;
-                                          _logLevelFilters[LogLevel.info] =
-                                              true;
-                                        }
-                                      });
-                                    },
-                                  ),
-                                  // 로그 레벨 필터 (로그 필터 활성화 시에만 표시)
-                                  if (_activeFilters[MessageFilter.log] ??
-                                      false) ...[
-                                    const SizedBox(width: 4),
-                                    Container(
-                                      height: 24,
-                                      width: 1,
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .outlineVariant,
-                                    ),
-                                    const SizedBox(width: 4),
-                                    FilterChip(
-                                      label: _buildFilterChipLabel(
-                                        icon: Icons.error,
-                                        text: 'Error',
-                                        textColor:
-                                            (_logLevelFilters[LogLevel.error] ??
-                                                    true)
-                                                ? const Color(0xFF8B1E2D)
-                                                : Theme.of(context)
-                                                    .colorScheme
-                                                    .onSurface,
-                                        iconColor: const Color(0xFFDC3545),
-                                        iconSize: 12,
-                                        fontSize: 10,
-                                      ),
-                                      visualDensity: VisualDensity.compact,
-                                      selected:
-                                          _logLevelFilters[LogLevel.error] ??
-                                              true,
-                                      selectedColor: const Color(0xFFFFEBEE),
-                                      checkmarkColor: const Color(0xFFDC3545),
-                                      onSelected: (selected) {
-                                        setState(() {
-                                          _logLevelFilters[LogLevel.error] =
-                                              selected;
-                                        });
-                                      },
-                                    ),
-                                    FilterChip(
-                                      label: _buildFilterChipLabel(
-                                        icon: Icons.warning,
-                                        text: 'Warn',
-                                        textColor: (_logLevelFilters[
-                                                    LogLevel.warning] ??
-                                                true)
-                                            ? const Color(0xFF8A4B00)
-                                            : Theme.of(context)
+                                          border: Border.all(
+                                            color: Theme.of(context)
                                                 .colorScheme
-                                                .onSurface,
-                                        iconColor: const Color(0xFFFF9800),
-                                        iconSize: 12,
-                                        fontSize: 10,
-                                      ),
-                                      visualDensity: VisualDensity.compact,
-                                      selected:
-                                          _logLevelFilters[LogLevel.warning] ??
-                                              true,
-                                      selectedColor: const Color(0xFFFFF3E0),
-                                      checkmarkColor: const Color(0xFFFF9800),
-                                      onSelected: (selected) {
-                                        setState(() {
-                                          _logLevelFilters[LogLevel.warning] =
-                                              selected;
-                                        });
-                                      },
-                                    ),
-                                    FilterChip(
-                                      label: _buildFilterChipLabel(
-                                        icon: Icons.info,
-                                        text: 'Info',
-                                        textColor:
-                                            (_logLevelFilters[LogLevel.info] ??
-                                                    true)
-                                                ? Theme.of(context)
-                                                    .colorScheme
-                                                    .onTertiaryContainer
-                                                : Theme.of(context)
-                                                    .colorScheme
-                                                    .onSurface,
-                                        iconColor:
-                                            (_logLevelFilters[LogLevel.info] ??
-                                                    true)
-                                                ? Theme.of(context)
-                                                    .colorScheme
-                                                    .onTertiaryContainer
-                                                : Theme.of(context)
-                                                    .colorScheme
-                                                    .tertiary,
-                                        iconSize: 12,
-                                        fontSize: 10,
-                                      ),
-                                      visualDensity: VisualDensity.compact,
-                                      selected:
-                                          _logLevelFilters[LogLevel.info] ??
-                                              true,
-                                      selectedColor: Theme.of(context)
-                                          .colorScheme
-                                          .tertiaryContainer,
-                                      checkmarkColor: Theme.of(context)
-                                          .colorScheme
-                                          .tertiary,
-                                      onSelected: (selected) {
-                                        setState(() {
-                                          _logLevelFilters[LogLevel.info] =
-                                              selected;
-                                        });
-                                      },
-                                    ),
-                                  ],
-                                  FilterChip(
-                                    label: _buildFilterChipLabel(
-                                      icon: Icons.info_outline,
-                                      text: 'System',
-                                      textColor: (_activeFilters[
-                                                  MessageFilter.system] ??
-                                              true)
-                                          ? Theme.of(context)
-                                              .colorScheme
-                                              .onSurface
-                                          : Theme.of(context)
-                                              .colorScheme
-                                              .onSurface,
-                                      iconColor: (_activeFilters[
-                                                  MessageFilter.system] ??
-                                              true)
-                                          ? Theme.of(context)
-                                              .colorScheme
-                                              .onSurfaceVariant
-                                          : Theme.of(context)
-                                              .colorScheme
-                                              .onSurfaceVariant,
-                                    ),
-                                    selected:
-                                        _activeFilters[MessageFilter.system] ??
-                                            true,
-                                    selectedColor: Theme.of(context)
-                                        .colorScheme
-                                        .surfaceContainerHighest,
-                                    checkmarkColor: Theme.of(context)
-                                        .colorScheme
-                                        .onSurfaceVariant,
-                                    onSelected: (selected) {
-                                      setState(() {
-                                        _activeFilters[MessageFilter.system] =
-                                            selected;
-                                      });
-                                    },
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                        const Divider(height: 1),
-                        Expanded(child: _buildMessageListWithScrollButtons()),
-                      ],
-                    ),
-                  ),
-                ),
-                // 맨 아래: 명령 입력 섹션
-                if (_isConnected) ...[
-                  const Divider(height: 1),
-                  Card(
-                    margin: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12.0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(6),
-                                decoration: BoxDecoration(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .primaryContainer,
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Icon(
-                                  Icons.tune,
-                                  size: 18,
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onPrimaryContainer,
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Text(
-                                '모델 설정',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                  color:
-                                      Theme.of(context).colorScheme.onSurface,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          if (_capabilitiesLoading && !_capabilitiesLoaded)
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .surfaceContainerHighest,
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .outline
-                                      .withOpacity(0.2),
-                                ),
-                              ),
-                              child: Row(
-                                children: [
-                                  const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Text(
-                                      '모델 목록을 불러오는 중...',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .onSurfaceVariant,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            )
-                          else ...[
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 12, vertical: 4),
-                                    decoration: BoxDecoration(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .surfaceContainerHighest,
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .outline
-                                            .withOpacity(0.2),
-                                        width: 1,
-                                      ),
-                                    ),
-                                    child: DropdownButton<String>(
-                                      value: _selectedModel == 'auto' ||
-                                              _availableModels.any((item) =>
-                                                  (item['model'] ?? '')
-                                                      .toString()
-                                                      .trim() ==
-                                                  _selectedModel)
-                                          ? _selectedModel
-                                          : 'auto',
-                                      isExpanded: true,
-                                      isDense: true,
-                                      underline: Container(),
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .onSurface,
-                                      ),
-                                      dropdownColor:
-                                          Theme.of(context).colorScheme.surface,
-                                      icon: Icon(
-                                        Icons.arrow_drop_down,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .onSurfaceVariant,
-                                      ),
-                                      items: [
-                                        const DropdownMenuItem(
-                                          value: 'auto',
-                                          child: Text('Model: Auto (기본값)',
-                                              style: TextStyle(fontSize: 12)),
+                                                .tertiary
+                                                .withOpacity(0.3),
+                                            width: 1,
+                                          ),
                                         ),
-                                        ..._availableModels.map((item) {
-                                          final model =
-                                              (item['model'] ?? '').toString();
-                                          final displayName =
-                                              _getModelDisplayName(
-                                                  model.trim());
-                                          return DropdownMenuItem(
-                                            value: model.trim(),
-                                            child: Text(
-                                              'Model: $displayName',
-                                              style:
-                                                  const TextStyle(fontSize: 12),
-                                            ),
-                                          );
-                                        }),
-                                      ],
-                                      onChanged: (value) {
-                                        if (value != null) {
-                                          setState(() {
-                                            _selectedModel =
-                                                _normalizeModel(value);
-                                            _selectedReasoningEffort =
-                                                _normalizeReasoningEffort(
-                                                    _selectedReasoningEffort,
-                                                    _selectedModel);
-                                          });
-                                          unawaited(AppSettings()
-                                              .setDefaultModel(_selectedModel));
-                                        }
-                                      },
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 12, vertical: 4),
-                                    decoration: BoxDecoration(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .surfaceContainerHighest,
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .outline
-                                            .withOpacity(0.2),
-                                        width: 1,
-                                      ),
-                                    ),
-                                    child: DropdownButton<String>(
-                                      value: _selectedReasoningEffort ==
-                                                  'auto' ||
-                                              _getAvailableReasoningEffortsForModel(
-                                                      _selectedModel)
-                                                  .contains(
-                                                      _selectedReasoningEffort)
-                                          ? _selectedReasoningEffort
-                                          : 'auto',
-                                      isExpanded: true,
-                                      isDense: true,
-                                      underline: Container(),
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .onSurface,
-                                      ),
-                                      dropdownColor:
-                                          Theme.of(context).colorScheme.surface,
-                                      icon: Icon(
-                                        Icons.arrow_drop_down,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .onSurfaceVariant,
-                                      ),
-                                      items: [
-                                        const DropdownMenuItem(
-                                          value: 'auto',
-                                          child: Text('Reasoning: Auto',
-                                              style: TextStyle(fontSize: 12)),
-                                        ),
-                                        ..._getAvailableReasoningEffortsForModel(
-                                                _selectedModel)
-                                            .map((effort) => DropdownMenuItem(
-                                                  value: effort,
-                                                  child: Text(
-                                                    'Reasoning: ${effort[0].toUpperCase()}${effort.substring(1)}',
-                                                    style: const TextStyle(
-                                                        fontSize: 12),
-                                                  ),
-                                                )),
-                                      ],
-                                      onChanged: (value) {
-                                        if (value != null) {
-                                          setState(() {
-                                            _selectedReasoningEffort =
-                                                _normalizeReasoningEffort(
-                                                    value, _selectedModel);
-                                          });
-                                          unawaited(AppSettings()
-                                              .setDefaultReasoningEffort(
-                                                  _selectedReasoningEffort));
-                                        }
-                                      },
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            Padding(
-                              padding: const EdgeInsets.only(top: 6.0),
-                              child: Text(
-                                'Models: ${_availableModels.length} · Selected: ${_getModelDisplayName(_selectedModel)} · Reasoning options: ${_getAvailableReasoningEffortsForModel(_selectedModel).join(", ")}',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onSurfaceVariant,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 6),
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .surfaceContainerHighest,
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  child: Text(
-                                    _capabilitiesLoaded
-                                        ? 'Capabilities loaded'
-                                        : 'Using fallback capabilities',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .onSurfaceVariant,
-                                    ),
-                                  ),
-                                ),
-                                if (_supportsIdeContext)
-                                  FilterChip(
-                                    label: const Text('IDE Context'),
-                                    selected: _useIdeContext,
-                                    onSelected: (selected) {
-                                      setState(() {
-                                        _useIdeContext = selected;
-                                      });
-                                    },
-                                  ),
-                                if (_supportsFlatMode)
-                                  FilterChip(
-                                    label: const Text('Flat Mode'),
-                                    selected: _useFlatMode,
-                                    onSelected: (selected) {
-                                      setState(() {
-                                        _useFlatMode = selected;
-                                      });
-                                    },
-                                  ),
-                              ],
-                            ),
-                          ],
-                          const SizedBox(height: 8),
-                          // KeyboardListener: Enter 전송. 컨트롤러에서 읽고 debounce + 전송 후 한 프레임 뒤 재정리로 IME 중복 전송 방지.
-                          // (Focus+동일 FocusNode는 focus_manager assertion 유발로 사용 안 함)
-                          KeyboardListener(
-                            focusNode: FocusNode(),
-                            onKeyEvent: (event) {
-                              if (event is! KeyDownEvent ||
-                                  event.logicalKey !=
-                                      LogicalKeyboardKey.enter ||
-                                  HardwareKeyboard.instance.isShiftPressed ||
-                                  !_commandFocusNode.hasFocus ||
-                                  !_isConnected) {
-                                return;
-                              }
-                              final now = DateTime.now();
-                              if (_lastPromptSubmitTime != null &&
-                                  now
-                                          .difference(_lastPromptSubmitTime!)
-                                          .inMilliseconds <
-                                      400) {
-                                return;
-                              }
-                              final text = _commandController.text.trim();
-                              if (text.isEmpty) return;
-                              _lastPromptSubmitTime = now;
-                              _sendCommand('insert_text',
-                                  text: text,
-                                  prompt: true,
-                                  execute: true,
-                                  newSession: false,
-                                  agentMode: _selectedAgentMode);
-                              _clearCommandInput();
-                            },
-                            // ValueListenableBuilder로 입력창 감싸기 (전체 UI 리빌드 방지)
-                            child: ValueListenableBuilder<TextEditingValue>(
-                              valueListenable: _commandController,
-                              builder: (context, textValue, child) {
-                                final hasText =
-                                    textValue.text.trim().isNotEmpty;
-                                return TextField(
-                                  key: ValueKey(_textFieldKey),
-                                  controller: _commandController,
-                                  focusNode: _commandFocusNode,
-                                  decoration: InputDecoration(
-                                    labelText: '프롬프트 입력',
-                                    hintText: 'Codex에게 요청할 내용을 입력하세요...',
-                                    prefixIcon: const Icon(Icons.edit_note),
-                                    suffixIcon: hasText
-                                        ? IconButton(
-                                            icon: Icon(
-                                              Icons.clear,
-                                              size: 20,
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .onSurfaceVariant,
-                                            ),
-                                            onPressed: _clearCommandInput,
-                                          )
-                                        : null,
-                                  ),
-                                  textInputAction: TextInputAction.newline,
-                                  keyboardType: TextInputType.multiline,
-                                  maxLines: 3,
-                                  minLines: 2,
-                                  enableSuggestions: true,
-                                  autocorrect: true,
-                                  textCapitalization: TextCapitalization.none,
-                                );
-                              },
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          // 버튼 영역도 ValueListenableBuilder로 감싸기
-                          ValueListenableBuilder<TextEditingValue>(
-                            valueListenable: _commandController,
-                            builder: (context, textValue, child) {
-                              final hasText = textValue.text.trim().isNotEmpty;
-                              return Row(
-                                children: [
-                                  Expanded(
-                                    child: FilledButton.icon(
-                                      onPressed: _isConnected &&
-                                              hasText &&
-                                              !_isWaitingForResponse
-                                          ? () {
-                                              if (!mounted) return;
-                                              final text = _commandController
-                                                  .text
-                                                  .trim();
-                                              if (text.isNotEmpty) {
-                                                _sendCommand('insert_text',
-                                                    text: text,
-                                                    prompt: true,
-                                                    execute: true,
-                                                    newSession: false,
-                                                    agentMode:
-                                                        _selectedAgentMode);
-                                                _clearCommandInput();
-                                              }
-                                            }
-                                          : null,
-                                      icon: _isWaitingForResponse
-                                          ? SizedBox(
+                                        child: Row(
+                                          children: [
+                                            SizedBox(
                                               width: 16,
                                               height: 16,
                                               child: CircularProgressIndicator(
@@ -5704,1208 +8097,2539 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                         Color>(
                                                   Theme.of(context)
                                                       .colorScheme
-                                                      .onPrimary,
+                                                      .tertiary,
                                                 ),
                                               ),
-                                            )
-                                          : const Icon(Icons.send, size: 18),
-                                      label: Text(_isWaitingForResponse
-                                          ? '전송 중...'
-                                          : '전송'),
-                                      style: FilledButton.styleFrom(
-                                        padding: const EdgeInsets.symmetric(
-                                            vertical: 14),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  if (_isWaitingForResponse) ...[
-                                    OutlinedButton.icon(
-                                      onPressed: _isConnected
-                                          ? () {
-                                              if (!mounted) return;
-                                              setState(() {
-                                                _isWaitingForResponse = false;
-                                              });
-                                              _sendCommand('stop_prompt');
-                                            }
-                                          : null,
-                                      icon: const Icon(Icons.stop, size: 18),
-                                      label: const Text('중지'),
-                                      style: OutlinedButton.styleFrom(
-                                        padding: const EdgeInsets.symmetric(
-                                            vertical: 14, horizontal: 16),
-                                      ),
-                                    ),
-                                  ] else ...[
-                                    OutlinedButton.icon(
-                                      onPressed: _isConnected && hasText
-                                          ? () {
-                                              if (!mounted) return;
-                                              final text = _commandController
-                                                  .text
-                                                  .trim();
-                                              if (text.isNotEmpty) {
-                                                _sendCommand('insert_text',
-                                                    text: text,
-                                                    prompt: true,
-                                                    execute: true,
-                                                    newSession: true,
-                                                    agentMode:
-                                                        _selectedAgentMode);
-                                                _clearCommandInput();
-                                              }
-                                            }
-                                          : null,
-                                      icon: const Icon(Icons.refresh, size: 18),
-                                      label: const Text('새 대화'),
-                                      style: OutlinedButton.styleFrom(
-                                        padding: const EdgeInsets.symmetric(
-                                            vertical: 14, horizontal: 16),
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              );
-                            },
-                          ),
-                          const SizedBox(height: 8),
-                          // 세션 정보 및 대화 히스토리 표시 (설정에서 활성화한 경우만)
-                          if (_isConnected && AppSettings().showHistory) ...[
-                            // 현재 세션 정보
-                            if (_currentCodexSessionId != null)
-                              Container(
-                                padding: const EdgeInsets.all(12.0),
-                                margin: const EdgeInsets.only(bottom: 8.0),
-                                decoration: BoxDecoration(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .primaryContainer
-                                      .withOpacity(0.3),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .primary
-                                        .withOpacity(0.2),
-                                    width: 1,
-                                  ),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Icon(
-                                      Icons.chat_bubble_outline,
-                                      size: 18,
-                                      color:
-                                          Theme.of(context).colorScheme.primary,
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Text(
-                                        '현재 세션: ${_currentCodexSessionId!.substring(0, 8)}...',
-                                        style: TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w500,
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .onSurface,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-
-                            // 세션 목록 및 대화 히스토리
-                            Container(
-                              margin: const EdgeInsets.only(top: 8.0),
-                              child: Card(
-                                child: ExpansionTile(
-                                  title: Text(
-                                    '세션 및 대화 히스토리',
-                                    style: TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w600,
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .onSurface,
-                                    ),
-                                  ),
-                                  leading: Container(
-                                    padding: const EdgeInsets.all(6),
-                                    decoration: BoxDecoration(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .secondaryContainer,
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Icon(
-                                      Icons.history,
-                                      size: 18,
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .onSecondaryContainer,
-                                    ),
-                                  ),
-                                  children: [
-                                    // 세션 목록
-                                    if (_availableSessions.isNotEmpty) ...[
-                                      Padding(
-                                        padding: const EdgeInsets.all(12.0),
-                                        child: Text(
-                                          '사용 가능한 세션',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.w600,
-                                            fontSize: 13,
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .onSurface,
-                                          ),
-                                        ),
-                                      ),
-                                      ..._availableSessions.map((sessionId) =>
-                                          ListTile(
-                                            dense: true,
-                                            leading: const Icon(Icons.chat,
-                                                size: 16),
-                                            title: Text(
-                                              sessionId.length > 20
-                                                  ? '${sessionId.substring(0, 20)}...'
-                                                  : sessionId,
-                                              style:
-                                                  const TextStyle(fontSize: 12),
                                             ),
-                                            trailing: IconButton(
-                                              icon: const Icon(Icons.refresh,
-                                                  size: 16),
-                                              onPressed: () => _loadChatHistory(
-                                                  sessionId: sessionId),
-                                              tooltip: '이 세션의 대화 히스토리 조회',
-                                            ),
-                                          )),
-                                      const Divider(),
-                                    ],
-
-                                    // 대화 히스토리
-                                    if (_chatHistory.isNotEmpty) ...[
-                                      Padding(
-                                        padding: const EdgeInsets.all(12.0),
-                                        child: Text(
-                                          '대화 히스토리',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.w600,
-                                            fontSize: 13,
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .onSurface,
-                                          ),
-                                        ),
-                                      ),
-                                      SizedBox(
-                                        height: 200,
-                                        child: ListView.builder(
-                                          shrinkWrap: true,
-                                          itemCount: _chatHistory.length,
-                                          itemBuilder: (context, index) {
-                                            final entry = _chatHistory[index];
-                                            final userMsg = entry['userMessage']
-                                                    as String? ??
-                                                '';
-                                            final assistantMsg =
-                                                entry['assistantResponse']
-                                                        as String? ??
-                                                    '';
-                                            final timestamp =
-                                                entry['timestamp'] as String? ??
-                                                    '';
-                                            final agentMode =
-                                                entry['agentMode'] as String?;
-
-                                            // 디버깅: 모든 항목 로그 출력 (문제 확인용)
-                                            print(
-                                                '📋 History entry[$index] - agentMode: $agentMode, userMsg: ${userMsg.length > 20 ? '${userMsg.substring(0, 20)}...' : userMsg}');
-                                            print(
-                                                '📋 Full entry keys: ${entry.keys.toList()}');
-
-                                            return Card(
-                                              margin:
-                                                  const EdgeInsets.symmetric(
-                                                      horizontal: 8.0,
-                                                      vertical: 4.0),
-                                              elevation: 0,
-                                              shape: RoundedRectangleBorder(
-                                                borderRadius:
-                                                    BorderRadius.circular(12),
-                                                side: BorderSide(
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: Text(
+                                                '재연결 시도 중... ($_reconnectAttempts회)',
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w500,
                                                   color: Theme.of(context)
                                                       .colorScheme
-                                                      .outline
-                                                      .withOpacity(0.1),
-                                                  width: 1,
+                                                      .onSurface,
                                                 ),
                                               ),
-                                              child: Padding(
-                                                padding:
-                                                    const EdgeInsets.all(12.0),
-                                                child: Column(
-                                                  crossAxisAlignment:
-                                                      CrossAxisAlignment.start,
-                                                  children: [
-                                                    if (userMsg.isNotEmpty)
-                                                      Padding(
-                                                        padding:
-                                                            const EdgeInsets
-                                                                .only(
-                                                                bottom: 4.0),
-                                                        child: Row(
-                                                          crossAxisAlignment:
-                                                              CrossAxisAlignment
-                                                                  .start,
-                                                          children: [
-                                                            Expanded(
-                                                              child: Text(
-                                                                '👤 $userMsg',
-                                                                style: const TextStyle(
-                                                                    fontSize:
-                                                                        11,
-                                                                    fontWeight:
-                                                                        FontWeight
-                                                                            .bold),
-                                                              ),
-                                                            ),
-                                                            // 에이전트 모드 표시 (null이 아니고 비어있지 않은 경우, auto도 표시)
-                                                            if (agentMode !=
-                                                                    null &&
-                                                                agentMode
-                                                                    .isNotEmpty) ...[
-                                                              const SizedBox(
-                                                                  width: 4),
-                                                              Container(
-                                                                padding: const EdgeInsets
-                                                                    .symmetric(
-                                                                    horizontal:
-                                                                        6,
-                                                                    vertical:
-                                                                        3),
-                                                                decoration:
-                                                                    BoxDecoration(
-                                                                  color: Theme.of(
-                                                                          context)
-                                                                      .colorScheme
-                                                                      .primaryContainer,
-                                                                  borderRadius:
-                                                                      BorderRadius
-                                                                          .circular(
-                                                                              8),
-                                                                  border: Border
-                                                                      .all(
-                                                                    color: Theme.of(
-                                                                            context)
-                                                                        .colorScheme
-                                                                        .primary
-                                                                        .withOpacity(
-                                                                            0.3),
-                                                                    width: 1,
-                                                                  ),
-                                                                ),
-                                                                child: Row(
-                                                                  mainAxisSize:
-                                                                      MainAxisSize
-                                                                          .min,
-                                                                  children: [
-                                                                    Icon(
-                                                                      _getModeIcon(
-                                                                          agentMode),
-                                                                      size: 12,
-                                                                      color: Theme.of(
-                                                                              context)
-                                                                          .colorScheme
-                                                                          .onPrimaryContainer,
-                                                                    ),
-                                                                    const SizedBox(
-                                                                        width:
-                                                                            4),
-                                                                    Text(
-                                                                      _getModeDisplayName(
-                                                                          agentMode),
-                                                                      style:
-                                                                          TextStyle(
-                                                                        fontSize:
-                                                                            10,
-                                                                        fontWeight:
-                                                                            FontWeight.w600,
-                                                                        color: Theme.of(context)
-                                                                            .colorScheme
-                                                                            .onPrimaryContainer,
-                                                                      ),
-                                                                    ),
-                                                                  ],
-                                                                ),
-                                                              ),
-                                                            ],
-                                                          ],
-                                                        ),
-                                                      ),
-                                                    if (assistantMsg.isNotEmpty)
-                                                      Padding(
-                                                        padding:
-                                                            const EdgeInsets
-                                                                .only(
-                                                                bottom: 4.0),
-                                                        child: Text(
-                                                          '🤖 ${assistantMsg.length > 50 ? "${assistantMsg.substring(0, 50)}..." : assistantMsg}',
-                                                          style:
-                                                              const TextStyle(
-                                                                  fontSize: 11),
-                                                        ),
-                                                      ),
-                                                    if (timestamp.isNotEmpty)
-                                                      Text(
-                                                        _formatTime(
-                                                            DateTime.parse(
-                                                                timestamp)),
-                                                        style: TextStyle(
-                                                          fontSize: 9,
-                                                          color: Theme.of(
-                                                                  context)
-                                                              .colorScheme
-                                                              .onSurfaceVariant,
-                                                        ),
-                                                      ),
-                                                  ],
-                                                ),
-                                              ),
-                                            );
-                                          },
+                                            ),
+                                            TextButton(
+                                              onPressed: _forceStopReconnect,
+                                              child: const Text('취소',
+                                                  style:
+                                                      TextStyle(fontSize: 12)),
+                                            ),
+                                          ],
                                         ),
                                       ),
-                                    ] else ...[
-                                      Padding(
-                                        padding: const EdgeInsets.all(24.0),
-                                        child: Column(
+                                      const SizedBox(height: 8),
+                                    ],
+                                    // 연결 에러 표시
+                                    if (_lastConnectionError != null &&
+                                        !_isConnected &&
+                                        !_isReconnecting) ...[
+                                      Container(
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .errorContainer
+                                              .withOpacity(0.3),
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                          border: Border.all(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .error
+                                                .withOpacity(0.2),
+                                            width: 1,
+                                          ),
+                                        ),
+                                        child: Row(
                                           children: [
                                             Icon(
-                                              Icons.history,
-                                              size: 48,
+                                              Icons.error_outline,
+                                              size: 20,
                                               color: Theme.of(context)
                                                   .colorScheme
-                                                  .onSurfaceVariant
-                                                  .withOpacity(0.4),
+                                                  .error,
                                             ),
-                                            const SizedBox(height: 12),
-                                            Text(
-                                              '대화 히스토리가 없습니다',
-                                              style: TextStyle(
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.w500,
-                                                color: Theme.of(context)
-                                                    .colorScheme
-                                                    .onSurfaceVariant,
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: Text(
+                                                '연결 실패: ${_lastConnectionError!.length > 50 ? '${_lastConnectionError!.substring(0, 50)}...' : _lastConnectionError}',
+                                                style: TextStyle(
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.w500,
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .onErrorContainer,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(height: 12),
+                                    ],
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceEvenly,
+                                      children: [
+                                        Expanded(
+                                          child: FilledButton.icon(
+                                            onPressed: _isConnected ||
+                                                    _isReconnecting ||
+                                                    _isConnectionActionInProgress
+                                                ? null
+                                                : () {
+                                                    unawaited(_connect());
+                                                  },
+                                            icon: Icon(
+                                              _connectionType ==
+                                                      ConnectionType.local
+                                                  ? Icons.computer
+                                                  : Icons.cloud,
+                                              size: 18,
+                                            ),
+                                            label: Text(
+                                              _connectionType ==
+                                                      ConnectionType.local
+                                                  ? '연결'
+                                                  : (_sessionIdController.text
+                                                          .trim()
+                                                          .isEmpty
+                                                      ? '생성 & 연결'
+                                                      : '연결'),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        if (!_isConnected &&
+                                            _lastConnectionError != null) ...[
+                                          Expanded(
+                                            child: OutlinedButton.icon(
+                                              onPressed: _isReconnecting
+                                                  ? null
+                                                  : _manualReconnect,
+                                              icon: const Icon(Icons.refresh,
+                                                  size: 18),
+                                              label: const Text('재연결'),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                        ],
+                                        Expanded(
+                                          child: OutlinedButton(
+                                            onPressed: _isConnected
+                                                ? _disconnect
+                                                : null,
+                                            child: const Text('연결 해제'),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    // 연결 상태 표시
+                                    if (_isConnected) ...[
+                                      const SizedBox(height: 12),
+                                      Container(
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .primaryContainer
+                                              .withOpacity(0.3),
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                          border: Border.all(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .primary
+                                                .withOpacity(0.2),
+                                            width: 1,
+                                          ),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Icon(
+                                              Icons.check_circle,
+                                              size: 20,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .primary,
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    _connectionType ==
+                                                            ConnectionType.local
+                                                        ? '로컬 서버에 연결됨'
+                                                        : '릴레이 서버에 연결됨',
+                                                    style: TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                      color: Theme.of(context)
+                                                          .colorScheme
+                                                          .onSurface,
+                                                    ),
+                                                  ),
+                                                  if (_connectionType ==
+                                                          ConnectionType
+                                                              .relay &&
+                                                      _sessionId != null) ...[
+                                                    const SizedBox(height: 4),
+                                                    Row(
+                                                      children: [
+                                                        Expanded(
+                                                          child: Text(
+                                                            '세션 ID: $_sessionId',
+                                                            style: TextStyle(
+                                                              fontSize: 12,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w500,
+                                                              color: Theme.of(
+                                                                      context)
+                                                                  .colorScheme
+                                                                  .onSurfaceVariant,
+                                                              fontFamily:
+                                                                  'monospace',
+                                                            ),
+                                                          ),
+                                                        ),
+                                                        IconButton(
+                                                          icon: const Icon(
+                                                              Icons.copy,
+                                                              size: 16),
+                                                          padding:
+                                                              EdgeInsets.zero,
+                                                          constraints:
+                                                              const BoxConstraints(),
+                                                          onPressed: () {
+                                                            Clipboard.setData(
+                                                                ClipboardData(
+                                                                    text:
+                                                                        _sessionId!));
+                                                            ScaffoldMessenger
+                                                                    .of(context)
+                                                                .showSnackBar(
+                                                              const SnackBar(
+                                                                content: Text(
+                                                                    '세션 ID가 클립보드에 복사되었습니다'),
+                                                                duration:
+                                                                    Duration(
+                                                                        seconds:
+                                                                            1),
+                                                              ),
+                                                            );
+                                                          },
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ],
+                                                ],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ] else if (!_isConnected &&
+                                        !_isReconnecting) ...[
+                                      const SizedBox(height: 12),
+                                      Container(
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .surfaceContainerHighest
+                                              .withOpacity(0.5),
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                          border: Border.all(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .outline
+                                                .withOpacity(0.2),
+                                            width: 1,
+                                          ),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Icon(
+                                              Icons.cloud_off,
+                                              size: 20,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .onSurfaceVariant,
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: Text(
+                                                '연결되지 않음',
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w500,
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurfaceVariant,
+                                                ),
                                               ),
                                             ),
                                           ],
                                         ),
                                       ),
                                     ],
-
-                                    // 새로고침 버튼
-                                    Padding(
-                                      padding: const EdgeInsets.all(12.0),
-                                      child: OutlinedButton.icon(
-                                        onPressed: () {
-                                          _loadSessionInfo();
-                                          _loadChatHistory();
-                                        },
-                                        icon:
-                                            const Icon(Icons.refresh, size: 18),
-                                        label: const Text('새로고침'),
-                                        style: OutlinedButton.styleFrom(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 20, vertical: 12),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      // 가운데: 메시지 로그 (가장 많은 공간 차지)
+                      Expanded(
+                        child: Card(
+                          margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              // Messages 헤더 및 필터
+                              Padding(
+                                padding: const EdgeInsets.all(12.0),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Icon(
+                                              Icons.chat_bubble_outline,
+                                              size: 20,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .primary,
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Text(
+                                              '메시지',
+                                              style: TextStyle(
+                                                fontSize: 18,
+                                                fontWeight: FontWeight.w600,
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurface,
+                                              ),
+                                            ),
+                                          ],
                                         ),
-                                      ),
+                                        // 표시/전체, 과거 메시지 불러오기 - 잠시 숨김
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    // 검색: 범위(전체/답변만) + 입력창
+                                    Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.center,
+                                      children: [
+                                        ConstrainedBox(
+                                          constraints: const BoxConstraints(
+                                              minWidth: 200),
+                                          child: SegmentedButton<String>(
+                                            segments: const [
+                                              ButtonSegment<String>(
+                                                value: _searchScopeAll,
+                                                label: Text('전체',
+                                                    softWrap: false,
+                                                    overflow:
+                                                        TextOverflow.clip),
+                                                icon:
+                                                    Icon(Icons.chat, size: 14),
+                                              ),
+                                              ButtonSegment<String>(
+                                                value: _searchScopeAnswerOnly,
+                                                label: Text('답변만',
+                                                    softWrap: false,
+                                                    overflow:
+                                                        TextOverflow.clip),
+                                                icon: Icon(Icons.smart_toy,
+                                                    size: 14),
+                                              ),
+                                            ],
+                                            selected: {_searchScope},
+                                            onSelectionChanged:
+                                                (Set<String> s) {
+                                              setState(
+                                                  () => _searchScope = s.first);
+                                            },
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: TextField(
+                                            onChanged: (v) => setState(
+                                                () => _searchQuery = v),
+                                            decoration: InputDecoration(
+                                              hintText: '메시지 검색',
+                                              isDense: true,
+                                              contentPadding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 12,
+                                                      vertical: 8),
+                                              prefixIcon: const Icon(
+                                                  Icons.search,
+                                                  size: 20),
+                                              suffixIcon: _searchQuery
+                                                      .isNotEmpty
+                                                  ? IconButton(
+                                                      icon: const Icon(
+                                                          Icons.clear,
+                                                          size: 18),
+                                                      onPressed: () => setState(
+                                                          () => _searchQuery =
+                                                              ''),
+                                                    )
+                                                  : null,
+                                              border: OutlineInputBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    // 필터 칩들
+                                    Wrap(
+                                      spacing: 8.0,
+                                      runSpacing: 4.0,
+                                      children: [
+                                        FilterChip(
+                                          label: _buildFilterChipLabel(
+                                            icon: Icons.smart_toy,
+                                            text: 'AI Response',
+                                            textColor: (_activeFilters[
+                                                        MessageFilter
+                                                            .aiResponse] ??
+                                                    true)
+                                                ? Theme.of(context)
+                                                    .colorScheme
+                                                    .onTertiaryContainer
+                                                : Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurface,
+                                          ),
+                                          selected: _activeFilters[
+                                                  MessageFilter.aiResponse] ??
+                                              true,
+                                          selectedColor: Theme.of(context)
+                                              .colorScheme
+                                              .tertiaryContainer,
+                                          checkmarkColor: Theme.of(context)
+                                              .colorScheme
+                                              .tertiary,
+                                          onSelected: (selected) {
+                                            setState(() {
+                                              _activeFilters[MessageFilter
+                                                  .aiResponse] = selected;
+                                            });
+                                          },
+                                        ),
+                                        FilterChip(
+                                          label: _buildFilterChipLabel(
+                                            icon: Icons.person,
+                                            text: 'User Prompt',
+                                            textColor: (_activeFilters[
+                                                        MessageFilter
+                                                            .userPrompt] ??
+                                                    true)
+                                                ? Theme.of(context)
+                                                    .colorScheme
+                                                    .onSecondaryContainer
+                                                : Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurface,
+                                          ),
+                                          selected: _activeFilters[
+                                                  MessageFilter.userPrompt] ??
+                                              true,
+                                          selectedColor: Theme.of(context)
+                                              .colorScheme
+                                              .secondaryContainer,
+                                          checkmarkColor: Theme.of(context)
+                                              .colorScheme
+                                              .secondary,
+                                          onSelected: (selected) {
+                                            setState(() {
+                                              _activeFilters[MessageFilter
+                                                  .userPrompt] = selected;
+                                            });
+                                          },
+                                        ),
+                                        FilterChip(
+                                          label: _buildFilterChipLabel(
+                                            icon: Icons.bug_report,
+                                            text: 'Logs',
+                                            textColor: (_activeFilters[
+                                                        MessageFilter.log] ??
+                                                    false)
+                                                ? const Color(0xFF7A4B00)
+                                                : Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurface,
+                                            iconColor: (_activeFilters[
+                                                        MessageFilter.log] ??
+                                                    false)
+                                                ? const Color(0xFFFF9800)
+                                                : Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurfaceVariant,
+                                          ),
+                                          selected: _activeFilters[
+                                                  MessageFilter.log] ??
+                                              false,
+                                          selectedColor:
+                                              const Color(0xFFFFF3E0), // 오렌지 배경
+                                          checkmarkColor:
+                                              const Color(0xFFFF9800), // 오렌지
+                                          onSelected: (selected) {
+                                            setState(() {
+                                              _activeFilters[
+                                                  MessageFilter.log] = selected;
+                                              // 로그 필터 활성화 시 레벨 필터 모두 체크
+                                              if (selected) {
+                                                _logLevelFilters[
+                                                    LogLevel.error] = true;
+                                                _logLevelFilters[
+                                                    LogLevel.warning] = true;
+                                                _logLevelFilters[
+                                                    LogLevel.info] = true;
+                                              }
+                                            });
+                                          },
+                                        ),
+                                        // 로그 레벨 필터 (로그 필터 활성화 시에만 표시)
+                                        if (_activeFilters[MessageFilter.log] ??
+                                            false) ...[
+                                          const SizedBox(width: 4),
+                                          Container(
+                                            height: 24,
+                                            width: 1,
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .outlineVariant,
+                                          ),
+                                          const SizedBox(width: 4),
+                                          FilterChip(
+                                            label: _buildFilterChipLabel(
+                                              icon: Icons.error,
+                                              text: 'Error',
+                                              textColor: (_logLevelFilters[
+                                                          LogLevel.error] ??
+                                                      true)
+                                                  ? const Color(0xFF8B1E2D)
+                                                  : Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurface,
+                                              iconColor:
+                                                  const Color(0xFFDC3545),
+                                              iconSize: 12,
+                                              fontSize: 10,
+                                            ),
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                            selected: _logLevelFilters[
+                                                    LogLevel.error] ??
+                                                true,
+                                            selectedColor:
+                                                const Color(0xFFFFEBEE),
+                                            checkmarkColor:
+                                                const Color(0xFFDC3545),
+                                            onSelected: (selected) {
+                                              setState(() {
+                                                _logLevelFilters[
+                                                    LogLevel.error] = selected;
+                                              });
+                                            },
+                                          ),
+                                          FilterChip(
+                                            label: _buildFilterChipLabel(
+                                              icon: Icons.warning,
+                                              text: 'Warn',
+                                              textColor: (_logLevelFilters[
+                                                          LogLevel.warning] ??
+                                                      true)
+                                                  ? const Color(0xFF8A4B00)
+                                                  : Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurface,
+                                              iconColor:
+                                                  const Color(0xFFFF9800),
+                                              iconSize: 12,
+                                              fontSize: 10,
+                                            ),
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                            selected: _logLevelFilters[
+                                                    LogLevel.warning] ??
+                                                true,
+                                            selectedColor:
+                                                const Color(0xFFFFF3E0),
+                                            checkmarkColor:
+                                                const Color(0xFFFF9800),
+                                            onSelected: (selected) {
+                                              setState(() {
+                                                _logLevelFilters[LogLevel
+                                                    .warning] = selected;
+                                              });
+                                            },
+                                          ),
+                                          FilterChip(
+                                            label: _buildFilterChipLabel(
+                                              icon: Icons.info,
+                                              text: 'Info',
+                                              textColor: (_logLevelFilters[
+                                                          LogLevel.info] ??
+                                                      true)
+                                                  ? Theme.of(context)
+                                                      .colorScheme
+                                                      .onTertiaryContainer
+                                                  : Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurface,
+                                              iconColor: (_logLevelFilters[
+                                                          LogLevel.info] ??
+                                                      true)
+                                                  ? Theme.of(context)
+                                                      .colorScheme
+                                                      .onTertiaryContainer
+                                                  : Theme.of(context)
+                                                      .colorScheme
+                                                      .tertiary,
+                                              iconSize: 12,
+                                              fontSize: 10,
+                                            ),
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                            selected: _logLevelFilters[
+                                                    LogLevel.info] ??
+                                                true,
+                                            selectedColor: Theme.of(context)
+                                                .colorScheme
+                                                .tertiaryContainer,
+                                            checkmarkColor: Theme.of(context)
+                                                .colorScheme
+                                                .tertiary,
+                                            onSelected: (selected) {
+                                              setState(() {
+                                                _logLevelFilters[
+                                                    LogLevel.info] = selected;
+                                              });
+                                            },
+                                          ),
+                                        ],
+                                        FilterChip(
+                                          label: _buildFilterChipLabel(
+                                            icon: Icons.info_outline,
+                                            text: 'System',
+                                            textColor: (_activeFilters[
+                                                        MessageFilter.system] ??
+                                                    true)
+                                                ? Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurface
+                                                : Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurface,
+                                            iconColor: (_activeFilters[
+                                                        MessageFilter.system] ??
+                                                    true)
+                                                ? Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurfaceVariant
+                                                : Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurfaceVariant,
+                                          ),
+                                          selected: _activeFilters[
+                                                  MessageFilter.system] ??
+                                              true,
+                                          selectedColor: Theme.of(context)
+                                              .colorScheme
+                                              .surfaceContainerHighest,
+                                          checkmarkColor: Theme.of(context)
+                                              .colorScheme
+                                              .onSurfaceVariant,
+                                          onSelected: (selected) {
+                                            setState(() {
+                                              _activeFilters[MessageFilter
+                                                  .system] = selected;
+                                            });
+                                          },
+                                        ),
+                                      ],
                                     ),
                                   ],
                                 ),
                               ),
-                            ),
-                            Container(
-                              margin: const EdgeInsets.only(top: 8.0),
-                              child: Card(
-                                child: ExpansionTile(
-                                  title: Text(
-                                    'Approvals & actions',
-                                    style: TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w600,
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .onSurface,
+                              const Divider(height: 1),
+                              Expanded(
+                                  child: _buildMessageListWithScrollButtons()),
+                            ],
+                          ),
+                        ),
+                      ),
+                      // 맨 아래: 명령 입력 섹션
+                      if (_isConnected) ...[
+                        const Divider(height: 1),
+                        Card(
+                          margin: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12.0),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(6),
+                                      decoration: BoxDecoration(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .primaryContainer,
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Icon(
+                                        Icons.tune,
+                                        size: 18,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onPrimaryContainer,
+                                      ),
                                     ),
-                                  ),
-                                  subtitle: Text(
-                                    'codex: ${_pendingCodexServerRequests.length} · relay: ${_pendingCommandApprovals.length}',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .onSurfaceVariant,
+                                    const SizedBox(width: 12),
+                                    Text(
+                                      '모델 설정',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurface,
+                                      ),
                                     ),
-                                  ),
-                                  leading: Container(
-                                    padding: const EdgeInsets.all(6),
+                                  ],
+                                ),
+                                const SizedBox(height: 10),
+                                if (_capabilitiesLoading &&
+                                    !_capabilitiesLoaded)
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
                                     decoration: BoxDecoration(
                                       color: Theme.of(context)
                                           .colorScheme
-                                          .tertiaryContainer,
-                                      borderRadius: BorderRadius.circular(8),
+                                          .surfaceContainerHighest,
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .outline
+                                            .withOpacity(0.2),
+                                      ),
                                     ),
-                                    child: Icon(
-                                      Icons.security,
-                                      size: 18,
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .onTertiaryContainer,
+                                    child: Row(
+                                      children: [
+                                        const SizedBox(
+                                          width: 18,
+                                          height: 18,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Text(
+                                            _modelCatalogLoadingText,
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .onSurfaceVariant,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  )
+                                else ...[
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 12, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .surfaceContainerHighest,
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                            border: Border.all(
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .outline
+                                                  .withOpacity(0.2),
+                                              width: 1,
+                                            ),
+                                          ),
+                                          child: DropdownButton<String>(
+                                            value: _selectedModel == 'auto' ||
+                                                    _availableModels.any(
+                                                        (item) =>
+                                                            (item['model'] ??
+                                                                    '')
+                                                                .toString()
+                                                                .trim() ==
+                                                            _selectedModel)
+                                                ? _selectedModel
+                                                : 'auto',
+                                            isExpanded: true,
+                                            isDense: true,
+                                            underline: Container(),
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .onSurface,
+                                            ),
+                                            dropdownColor: Theme.of(context)
+                                                .colorScheme
+                                                .surface,
+                                            icon: Icon(
+                                              Icons.arrow_drop_down,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .onSurfaceVariant,
+                                            ),
+                                            items: [
+                                              const DropdownMenuItem(
+                                                value: 'auto',
+                                                child: Text('Model: Auto (기본값)',
+                                                    style: TextStyle(
+                                                        fontSize: 12)),
+                                              ),
+                                              ..._availableModels.map((item) {
+                                                final model =
+                                                    (item['model'] ?? '')
+                                                        .toString();
+                                                final displayName =
+                                                    _getModelDisplayName(
+                                                        model.trim());
+                                                return DropdownMenuItem(
+                                                  value: model.trim(),
+                                                  child: Text(
+                                                    'Model: $displayName',
+                                                    style: const TextStyle(
+                                                        fontSize: 12),
+                                                  ),
+                                                );
+                                              }),
+                                            ],
+                                            onChanged: (value) {
+                                              if (value != null) {
+                                                setState(() {
+                                                  _selectedModel =
+                                                      _normalizeModel(value);
+                                                  _selectedReasoningEffort =
+                                                      _normalizeReasoningEffort(
+                                                          _selectedReasoningEffort,
+                                                          _selectedModel);
+                                                });
+                                                unawaited(AppSettings()
+                                                    .setDefaultModel(
+                                                        _selectedModel));
+                                              }
+                                            },
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 12, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .surfaceContainerHighest,
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                            border: Border.all(
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .outline
+                                                  .withOpacity(0.2),
+                                              width: 1,
+                                            ),
+                                          ),
+                                          child: DropdownButton<String>(
+                                            value: _selectedReasoningEffort ==
+                                                        'auto' ||
+                                                    _getAvailableReasoningEffortsForModel(
+                                                            _selectedModel)
+                                                        .contains(
+                                                            _selectedReasoningEffort)
+                                                ? _selectedReasoningEffort
+                                                : 'auto',
+                                            isExpanded: true,
+                                            isDense: true,
+                                            underline: Container(),
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .onSurface,
+                                            ),
+                                            dropdownColor: Theme.of(context)
+                                                .colorScheme
+                                                .surface,
+                                            icon: Icon(
+                                              Icons.arrow_drop_down,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .onSurfaceVariant,
+                                            ),
+                                            items: [
+                                              const DropdownMenuItem(
+                                                value: 'auto',
+                                                child: Text('Reasoning: Auto',
+                                                    style: TextStyle(
+                                                        fontSize: 12)),
+                                              ),
+                                              ..._getAvailableReasoningEffortsForModel(
+                                                      _selectedModel)
+                                                  .map((effort) =>
+                                                      DropdownMenuItem(
+                                                        value: effort,
+                                                        child: Text(
+                                                          'Reasoning: ${effort[0].toUpperCase()}${effort.substring(1)}',
+                                                          style:
+                                                              const TextStyle(
+                                                                  fontSize: 12),
+                                                        ),
+                                                      )),
+                                            ],
+                                            onChanged: (value) {
+                                              if (value != null) {
+                                                setState(() {
+                                                  _selectedReasoningEffort =
+                                                      _normalizeReasoningEffort(
+                                                          value,
+                                                          _selectedModel);
+                                                });
+                                                unawaited(AppSettings()
+                                                    .setDefaultReasoningEffort(
+                                                        _selectedReasoningEffort));
+                                              }
+                                            },
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 6.0),
+                                    child: Text(
+                                      'Models: ${_availableModels.length} · Selected: ${_getModelDisplayName(_selectedModel)} · Reasoning options: ${_getAvailableReasoningEffortsForModel(_selectedModel).join(", ")}',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
+                                      ),
                                     ),
                                   ),
-                                  children: [
-                                    Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 12, vertical: 8),
-                                      child: Row(
-                                        children: [
+                                  const SizedBox(height: 8),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 10, vertical: 6),
+                                        decoration: BoxDecoration(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .surfaceContainerHighest,
+                                          borderRadius:
+                                              BorderRadius.circular(10),
+                                        ),
+                                        child: Text(
+                                          _capabilitiesFromCache
+                                              ? 'Using cached capabilities'
+                                              : _capabilitiesLoaded
+                                                  ? 'Capabilities loaded'
+                                                  : 'Using fallback capabilities',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                          ),
+                                        ),
+                                      ),
+                                      if (_supportsIdeContext)
+                                        FilterChip(
+                                          label: const Text('IDE Context'),
+                                          selected: _useIdeContext,
+                                          onSelected: (selected) {
+                                            setState(() {
+                                              _useIdeContext = selected;
+                                            });
+                                          },
+                                        ),
+                                      if (_supportsFlatMode)
+                                        FilterChip(
+                                          label: const Text('Flat Mode'),
+                                          selected: _useFlatMode,
+                                          onSelected: (selected) {
+                                            setState(() {
+                                              _useFlatMode = selected;
+                                            });
+                                          },
+                                        ),
+                                    ],
+                                  ),
+                                ],
+                                const SizedBox(height: 8),
+                                // Enter=전송 / Shift+Enter=줄바꿈
+                                // IME 조합 안정성을 위해 Focus(onKeyEvent) + KeyUp 전송으로 처리
+                                Focus(
+                                  onKeyEvent: _handlePromptInputKeyEvent,
+                                  // ValueListenableBuilder로 입력창 감싸기 (전체 UI 리빌드 방지)
+                                  child:
+                                      ValueListenableBuilder<TextEditingValue>(
+                                    valueListenable: _commandController,
+                                    builder: (context, textValue, child) {
+                                      final hasText =
+                                          textValue.text.trim().isNotEmpty;
+                                      return TextField(
+                                        controller: _commandController,
+                                        focusNode: _commandFocusNode,
+                                        decoration: InputDecoration(
+                                          labelText: '프롬프트 입력',
+                                          hintText: 'Codex에게 요청할 내용을 입력하세요...',
+                                          prefixIcon:
+                                              const Icon(Icons.edit_note),
+                                          suffixIcon: hasText
+                                              ? IconButton(
+                                                  icon: Icon(
+                                                    Icons.clear,
+                                                    size: 20,
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .onSurfaceVariant,
+                                                  ),
+                                                  onPressed: _clearCommandInput,
+                                                )
+                                              : null,
+                                        ),
+                                        textInputAction:
+                                            TextInputAction.newline,
+                                        keyboardType: TextInputType.multiline,
+                                        maxLines: 3,
+                                        minLines: 2,
+                                        enableSuggestions: true,
+                                        autocorrect: true,
+                                        textCapitalization:
+                                            TextCapitalization.none,
+                                      );
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                // 버튼 영역도 ValueListenableBuilder로 감싸기
+                                ValueListenableBuilder<TextEditingValue>(
+                                  valueListenable: _commandController,
+                                  builder: (context, textValue, child) {
+                                    final hasText =
+                                        textValue.text.trim().isNotEmpty;
+                                    return Row(
+                                      children: [
+                                        Expanded(
+                                          child: FilledButton.icon(
+                                            onPressed: _isConnected &&
+                                                    hasText &&
+                                                    !_isWaitingForResponse
+                                                ? () {
+                                                    unawaited(
+                                                        _submitPromptFromInput(
+                                                            newSession: false));
+                                                  }
+                                                : null,
+                                            icon: _isWaitingForResponse
+                                                ? SizedBox(
+                                                    width: 16,
+                                                    height: 16,
+                                                    child:
+                                                        CircularProgressIndicator(
+                                                      strokeWidth: 2,
+                                                      valueColor:
+                                                          AlwaysStoppedAnimation<
+                                                              Color>(
+                                                        Theme.of(context)
+                                                            .colorScheme
+                                                            .onPrimary,
+                                                      ),
+                                                    ),
+                                                  )
+                                                : const Icon(Icons.send,
+                                                    size: 18),
+                                            label: Text(_isWaitingForResponse
+                                                ? '전송 중...'
+                                                : '전송'),
+                                            style: FilledButton.styleFrom(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      vertical: 14),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        if (_isWaitingForResponse) ...[
                                           OutlinedButton.icon(
                                             onPressed: _isConnected
                                                 ? () {
-                                                    _loadCommandApprovals();
-                                                    _loadCommandEvents();
+                                                    if (!mounted) return;
+                                                    setState(() {
+                                                      _isWaitingForResponse =
+                                                          false;
+                                                    });
+                                                    _sendCommand('stop_prompt');
+                                                  }
+                                                : null,
+                                            icon: const Icon(Icons.stop,
+                                                size: 18),
+                                            label: const Text('중지'),
+                                            style: OutlinedButton.styleFrom(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      vertical: 14,
+                                                      horizontal: 16),
+                                            ),
+                                          ),
+                                        ] else ...[
+                                          OutlinedButton.icon(
+                                            onPressed: _isConnected && hasText
+                                                ? () {
+                                                    unawaited(
+                                                        _submitPromptFromInput(
+                                                            newSession: true));
                                                   }
                                                 : null,
                                             icon: const Icon(Icons.refresh,
-                                                size: 16),
-                                            label: const Text('새로고침'),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          if (_loadingCommandApprovals ||
-                                              _loadingCommandEvents)
-                                            const SizedBox(
-                                              width: 16,
-                                              height: 16,
-                                              child: CircularProgressIndicator(
-                                                  strokeWidth: 2),
+                                                size: 18),
+                                            label: const Text('새 대화'),
+                                            style: OutlinedButton.styleFrom(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      vertical: 14,
+                                                      horizontal: 16),
                                             ),
+                                          ),
+                                        ],
+                                      ],
+                                    );
+                                  },
+                                ),
+                                const SizedBox(height: 8),
+                                // 세션 정보 및 대화 히스토리 표시 (설정에서 활성화한 경우만)
+                                if (_isConnected &&
+                                    AppSettings().showHistory) ...[
+                                  // 현재 세션 정보
+                                  if (_currentCodexSessionId != null)
+                                    Container(
+                                      padding: const EdgeInsets.all(12.0),
+                                      margin:
+                                          const EdgeInsets.only(bottom: 8.0),
+                                      decoration: BoxDecoration(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .primaryContainer
+                                            .withOpacity(0.3),
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .primary
+                                              .withOpacity(0.2),
+                                          width: 1,
+                                        ),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Icon(
+                                            Icons.chat_bubble_outline,
+                                            size: 18,
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .primary,
+                                          ),
+                                          const SizedBox(width: 12),
+                                          Expanded(
+                                            child: Text(
+                                              '현재 세션: ${_currentCodexSessionId!.substring(0, 8)}...',
+                                              style: TextStyle(
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w500,
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurface,
+                                              ),
+                                            ),
+                                          ),
                                         ],
                                       ),
                                     ),
-                                    Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 12, vertical: 4),
-                                      child: Align(
-                                        alignment: Alignment.centerLeft,
-                                        child: Text(
-                                          'Pending Codex requests',
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.w600,
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .onSurface,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    if (_pendingCodexServerRequests.isEmpty)
-                                      Padding(
-                                        padding: const EdgeInsets.fromLTRB(
-                                            12, 0, 12, 8),
-                                        child: Align(
-                                          alignment: Alignment.centerLeft,
-                                          child: Text(
-                                            '대기 중인 Codex 요청이 없습니다.',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .onSurfaceVariant,
-                                            ),
-                                          ),
-                                        ),
-                                      )
-                                    else
-                                      ..._pendingCodexServerRequests
-                                          .take(5)
-                                          .map((request) {
-                                        final requestId =
-                                            request['requestId']?.toString() ??
-                                                '';
-                                        final requestKind =
-                                            request['requestKind']
-                                                    ?.toString() ??
-                                                '';
-                                        final summary =
-                                            _codexRequestSummary(request);
-                                        final detailLines = List<String>.from(
-                                            (request['detailLines'] as List? ??
-                                                    [])
-                                                .map((e) => e.toString()));
-                                        final choices = List<
-                                                Map<String, dynamic>>.from(
-                                            (request['choices'] as List? ?? [])
-                                                .map((e) =>
-                                                    Map<String, dynamic>.from(
-                                                        e as Map)));
-                                        final isSubmitting =
-                                            _submittingCodexRequestIds
-                                                .contains(requestId);
 
-                                        return Card(
-                                          margin: const EdgeInsets.fromLTRB(
-                                              12, 4, 12, 4),
-                                          elevation: 0,
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius:
-                                                BorderRadius.circular(10),
-                                            side: BorderSide(
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .outline
-                                                  .withOpacity(0.2),
-                                            ),
-                                          ),
-                                          child: Padding(
-                                            padding: const EdgeInsets.all(10),
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  _codexRequestTitle(request),
-                                                  style: const TextStyle(
-                                                    fontSize: 12,
-                                                    fontWeight: FontWeight.w700,
-                                                  ),
-                                                ),
-                                                if (summary.isNotEmpty) ...[
-                                                  const SizedBox(height: 4),
-                                                  Text(
-                                                    summary,
-                                                    style: const TextStyle(
-                                                      fontSize: 11,
-                                                      fontFamily: 'monospace',
-                                                    ),
-                                                  ),
-                                                ],
-                                                if (detailLines.isNotEmpty) ...[
-                                                  const SizedBox(height: 6),
-                                                  ...detailLines.take(3).map(
-                                                        (line) => Padding(
-                                                          padding:
-                                                              const EdgeInsets
-                                                                  .only(
-                                                                  bottom: 2),
-                                                          child: Text(
-                                                            line,
-                                                            style: TextStyle(
-                                                              fontSize: 11,
-                                                              color: Theme.of(
-                                                                      context)
-                                                                  .colorScheme
-                                                                  .onSurfaceVariant,
-                                                            ),
-                                                          ),
-                                                        ),
-                                                      ),
-                                                ],
-                                                const SizedBox(height: 8),
-                                                if (requestKind == 'user_input')
-                                                  Row(
-                                                    children: [
-                                                      Expanded(
-                                                        child: FilledButton(
-                                                          onPressed:
-                                                              isSubmitting
-                                                                  ? null
-                                                                  : () {
-                                                                      _openCodexUserInputDialog(
-                                                                          request);
-                                                                    },
-                                                          child: Text(
-                                                              isSubmitting
-                                                                  ? 'Sending...'
-                                                                  : 'Respond'),
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  )
-                                                else
-                                                  Wrap(
-                                                    spacing: 8,
-                                                    runSpacing: 8,
-                                                    children:
-                                                        choices.map((choice) {
-                                                      final label = choice[
-                                                                  'label']
-                                                              ?.toString() ??
-                                                          'Respond';
-                                                      final style = choice[
-                                                                  'style']
-                                                              ?.toString() ??
-                                                          'secondary';
-                                                      final responsePayload =
-                                                          Map<String,
-                                                                  dynamic>.from(
-                                                              choice['response']
-                                                                      as Map? ??
-                                                                  {});
-                                                      final buttonChild = Text(
-                                                          isSubmitting
-                                                              ? 'Sending...'
-                                                              : label);
-                                                      if (style == 'primary') {
-                                                        return FilledButton(
-                                                          onPressed:
-                                                              isSubmitting
-                                                                  ? null
-                                                                  : () {
-                                                                      _submitCodexDecision(
-                                                                          request,
-                                                                          responsePayload);
-                                                                    },
-                                                          child: buttonChild,
-                                                        );
-                                                      }
-                                                      return OutlinedButton(
-                                                        onPressed: isSubmitting
-                                                            ? null
-                                                            : () {
-                                                                _submitCodexDecision(
-                                                                    request,
-                                                                    responsePayload);
-                                                              },
-                                                        style: style == 'danger'
-                                                            ? OutlinedButton
-                                                                .styleFrom(
-                                                                foregroundColor:
-                                                                    Theme.of(
-                                                                            context)
-                                                                        .colorScheme
-                                                                        .error,
-                                                              )
-                                                            : null,
-                                                        child: buttonChild,
-                                                      );
-                                                    }).toList(),
-                                                  ),
-                                              ],
-                                            ),
-                                          ),
-                                        );
-                                      }),
-                                    const Divider(height: 20),
-                                    Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 12, vertical: 4),
-                                      child: Align(
-                                        alignment: Alignment.centerLeft,
-                                        child: Text(
-                                          'Pending approvals',
+                                  // 세션 목록 및 대화 히스토리
+                                  Container(
+                                    margin: const EdgeInsets.only(top: 8.0),
+                                    child: Card(
+                                      child: ExpansionTile(
+                                        title: Text(
+                                          '세션 및 대화 히스토리',
                                           style: TextStyle(
-                                            fontSize: 13,
+                                            fontSize: 15,
                                             fontWeight: FontWeight.w600,
                                             color: Theme.of(context)
                                                 .colorScheme
                                                 .onSurface,
                                           ),
                                         ),
-                                      ),
-                                    ),
-                                    if (_pendingCommandApprovals.isEmpty)
-                                      Padding(
-                                        padding: const EdgeInsets.fromLTRB(
-                                            12, 0, 12, 8),
-                                        child: Align(
-                                          alignment: Alignment.centerLeft,
-                                          child: Text(
-                                            '대기 중인 승인 요청이 없습니다.',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .onSurfaceVariant,
-                                            ),
+                                        leading: Container(
+                                          padding: const EdgeInsets.all(6),
+                                          decoration: BoxDecoration(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .secondaryContainer,
+                                            borderRadius:
+                                                BorderRadius.circular(8),
+                                          ),
+                                          child: Icon(
+                                            Icons.history,
+                                            size: 18,
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSecondaryContainer,
                                           ),
                                         ),
-                                      )
-                                    else
-                                      ..._pendingCommandApprovals
-                                          .take(5)
-                                          .map((approval) {
-                                        final approvalId =
-                                            approval['approval_id']
-                                                    ?.toString() ??
-                                                '';
-                                        final commandMessage =
-                                            approval['command_message']
-                                                    as Map<String, dynamic>? ??
-                                                {};
-                                        final commandData =
-                                            commandMessage['data']
-                                                    as Map<String, dynamic>? ??
-                                                {};
-                                        final commandRaw =
-                                            commandData['command']
-                                                    ?.toString() ??
-                                                '(unknown)';
-                                        final policy = approval['policy']
-                                                as Map<String, dynamic>? ??
-                                            {};
-                                        final riskLevel =
-                                            policy['risk_level']?.toString() ??
-                                                'unknown';
-                                        final reasons =
-                                            (policy['reasons'] as List? ?? [])
-                                                .map((e) => e.toString())
-                                                .join(', ');
-                                        return Card(
-                                          margin: const EdgeInsets.fromLTRB(
-                                              12, 4, 12, 4),
-                                          elevation: 0,
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius:
-                                                BorderRadius.circular(10),
-                                            side: BorderSide(
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .outline
-                                                  .withOpacity(0.2),
-                                            ),
-                                          ),
-                                          child: Padding(
-                                            padding: const EdgeInsets.all(10),
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                Row(
-                                                  children: [
-                                                    Expanded(
-                                                      child: Text(
-                                                        commandRaw,
-                                                        style: const TextStyle(
-                                                          fontSize: 12,
-                                                          fontFamily:
-                                                              'monospace',
-                                                          fontWeight:
-                                                              FontWeight.w600,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                    Container(
-                                                      padding: const EdgeInsets
-                                                          .symmetric(
-                                                          horizontal: 8,
-                                                          vertical: 2),
-                                                      decoration: BoxDecoration(
-                                                        color: _riskColor(
-                                                                riskLevel)
-                                                            .withOpacity(0.14),
-                                                        borderRadius:
-                                                            BorderRadius
-                                                                .circular(12),
-                                                      ),
-                                                      child: Text(
-                                                        riskLevel,
-                                                        style: TextStyle(
-                                                          fontSize: 10,
-                                                          fontWeight:
-                                                              FontWeight.w700,
-                                                          color: _riskColor(
-                                                              riskLevel),
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ],
+                                        children: [
+                                          // 세션 목록
+                                          if (_availableSessions
+                                              .isNotEmpty) ...[
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.all(12.0),
+                                              child: Text(
+                                                '사용 가능한 세션',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 13,
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurface,
                                                 ),
-                                                if (reasons.isNotEmpty) ...[
-                                                  const SizedBox(height: 4),
+                                              ),
+                                            ),
+                                            ..._availableSessions
+                                                .map((sessionId) => ListTile(
+                                                      dense: true,
+                                                      leading: const Icon(
+                                                          Icons.chat,
+                                                          size: 16),
+                                                      title: Text(
+                                                        sessionId.length > 20
+                                                            ? '${sessionId.substring(0, 20)}...'
+                                                            : sessionId,
+                                                        style: const TextStyle(
+                                                            fontSize: 12),
+                                                      ),
+                                                      trailing: IconButton(
+                                                        icon: const Icon(
+                                                            Icons.refresh,
+                                                            size: 16),
+                                                        onPressed: () =>
+                                                            _loadChatHistory(
+                                                                sessionId:
+                                                                    sessionId),
+                                                        tooltip:
+                                                            '이 세션의 대화 히스토리 조회',
+                                                      ),
+                                                    )),
+                                            const Divider(),
+                                          ],
+
+                                          // 대화 히스토리
+                                          if (_chatHistory.isNotEmpty) ...[
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.all(12.0),
+                                              child: Text(
+                                                '대화 히스토리',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 13,
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurface,
+                                                ),
+                                              ),
+                                            ),
+                                            SizedBox(
+                                              height: 200,
+                                              child: ListView.builder(
+                                                shrinkWrap: true,
+                                                itemCount: _chatHistory.length,
+                                                itemBuilder: (context, index) {
+                                                  final entry =
+                                                      _chatHistory[index];
+                                                  final userMsg =
+                                                      entry['userMessage']
+                                                              as String? ??
+                                                          '';
+                                                  final assistantMsg =
+                                                      entry['assistantResponse']
+                                                              as String? ??
+                                                          '';
+                                                  final timestamp =
+                                                      entry['timestamp']
+                                                              as String? ??
+                                                          '';
+                                                  final agentMode =
+                                                      entry['agentMode']
+                                                          as String?;
+
+                                                  // 디버깅: 모든 항목 로그 출력 (문제 확인용)
+                                                  print(
+                                                      '📋 History entry[$index] - agentMode: $agentMode, userMsg: ${userMsg.length > 20 ? '${userMsg.substring(0, 20)}...' : userMsg}');
+                                                  print(
+                                                      '📋 Full entry keys: ${entry.keys.toList()}');
+
+                                                  return Card(
+                                                    margin: const EdgeInsets
+                                                        .symmetric(
+                                                        horizontal: 8.0,
+                                                        vertical: 4.0),
+                                                    elevation: 0,
+                                                    shape:
+                                                        RoundedRectangleBorder(
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              12),
+                                                      side: BorderSide(
+                                                        color: Theme.of(context)
+                                                            .colorScheme
+                                                            .outline
+                                                            .withOpacity(0.1),
+                                                        width: 1,
+                                                      ),
+                                                    ),
+                                                    child: Padding(
+                                                      padding:
+                                                          const EdgeInsets.all(
+                                                              12.0),
+                                                      child: Column(
+                                                        crossAxisAlignment:
+                                                            CrossAxisAlignment
+                                                                .start,
+                                                        children: [
+                                                          if (userMsg
+                                                              .isNotEmpty)
+                                                            Padding(
+                                                              padding:
+                                                                  const EdgeInsets
+                                                                      .only(
+                                                                      bottom:
+                                                                          4.0),
+                                                              child: Row(
+                                                                crossAxisAlignment:
+                                                                    CrossAxisAlignment
+                                                                        .start,
+                                                                children: [
+                                                                  Expanded(
+                                                                    child: Text(
+                                                                      '👤 $userMsg',
+                                                                      style: const TextStyle(
+                                                                          fontSize:
+                                                                              11,
+                                                                          fontWeight:
+                                                                              FontWeight.bold),
+                                                                    ),
+                                                                  ),
+                                                                  // 에이전트 모드 표시 (null이 아니고 비어있지 않은 경우, auto도 표시)
+                                                                  if (agentMode !=
+                                                                          null &&
+                                                                      agentMode
+                                                                          .isNotEmpty) ...[
+                                                                    const SizedBox(
+                                                                        width:
+                                                                            4),
+                                                                    Container(
+                                                                      padding: const EdgeInsets
+                                                                          .symmetric(
+                                                                          horizontal:
+                                                                              6,
+                                                                          vertical:
+                                                                              3),
+                                                                      decoration:
+                                                                          BoxDecoration(
+                                                                        color: Theme.of(context)
+                                                                            .colorScheme
+                                                                            .primaryContainer,
+                                                                        borderRadius:
+                                                                            BorderRadius.circular(8),
+                                                                        border:
+                                                                            Border.all(
+                                                                          color: Theme.of(context)
+                                                                              .colorScheme
+                                                                              .primary
+                                                                              .withOpacity(0.3),
+                                                                          width:
+                                                                              1,
+                                                                        ),
+                                                                      ),
+                                                                      child:
+                                                                          Row(
+                                                                        mainAxisSize:
+                                                                            MainAxisSize.min,
+                                                                        children: [
+                                                                          Icon(
+                                                                            _getModeIcon(agentMode),
+                                                                            size:
+                                                                                12,
+                                                                            color:
+                                                                                Theme.of(context).colorScheme.onPrimaryContainer,
+                                                                          ),
+                                                                          const SizedBox(
+                                                                              width: 4),
+                                                                          Text(
+                                                                            _getModeDisplayName(agentMode),
+                                                                            style:
+                                                                                TextStyle(
+                                                                              fontSize: 10,
+                                                                              fontWeight: FontWeight.w600,
+                                                                              color: Theme.of(context).colorScheme.onPrimaryContainer,
+                                                                            ),
+                                                                          ),
+                                                                        ],
+                                                                      ),
+                                                                    ),
+                                                                  ],
+                                                                ],
+                                                              ),
+                                                            ),
+                                                          if (assistantMsg
+                                                              .isNotEmpty)
+                                                            Padding(
+                                                              padding:
+                                                                  const EdgeInsets
+                                                                      .only(
+                                                                      bottom:
+                                                                          4.0),
+                                                              child: Text(
+                                                                '🤖 ${assistantMsg.length > 50 ? "${assistantMsg.substring(0, 50)}..." : assistantMsg}',
+                                                                style:
+                                                                    const TextStyle(
+                                                                        fontSize:
+                                                                            11),
+                                                              ),
+                                                            ),
+                                                          if (timestamp
+                                                              .isNotEmpty)
+                                                            Text(
+                                                              _formatTime(
+                                                                  DateTime.parse(
+                                                                      timestamp)),
+                                                              style: TextStyle(
+                                                                fontSize: 9,
+                                                                color: Theme.of(
+                                                                        context)
+                                                                    .colorScheme
+                                                                    .onSurfaceVariant,
+                                                              ),
+                                                            ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  );
+                                                },
+                                              ),
+                                            ),
+                                          ] else ...[
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.all(24.0),
+                                              child: Column(
+                                                children: [
+                                                  Icon(
+                                                    Icons.history,
+                                                    size: 48,
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .onSurfaceVariant
+                                                        .withOpacity(0.4),
+                                                  ),
+                                                  const SizedBox(height: 12),
                                                   Text(
-                                                    reasons,
+                                                    '대화 히스토리가 없습니다',
                                                     style: TextStyle(
-                                                      fontSize: 11,
+                                                      fontSize: 14,
+                                                      fontWeight:
+                                                          FontWeight.w500,
                                                       color: Theme.of(context)
                                                           .colorScheme
                                                           .onSurfaceVariant,
                                                     ),
                                                   ),
                                                 ],
-                                                const SizedBox(height: 8),
-                                                Row(
-                                                  children: [
-                                                    Expanded(
-                                                      child: OutlinedButton(
-                                                        onPressed: () {
-                                                          _resolveCommandApproval(
-                                                              approvalId,
-                                                              'reject');
-                                                        },
-                                                        child: const Text(
-                                                            'Reject'),
-                                                      ),
-                                                    ),
-                                                    const SizedBox(width: 8),
-                                                    Expanded(
-                                                      child: FilledButton(
-                                                        onPressed: () {
-                                                          _resolveCommandApproval(
-                                                              approvalId,
-                                                              'approve');
-                                                        },
-                                                        child: const Text(
-                                                            'Approve'),
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
-                                              ],
+                                              ),
+                                            ),
+                                          ],
+
+                                          // 새로고침 버튼
+                                          Padding(
+                                            padding: const EdgeInsets.all(12.0),
+                                            child: OutlinedButton.icon(
+                                              onPressed: () {
+                                                _loadSessionInfo();
+                                                _loadChatHistory();
+                                              },
+                                              icon: const Icon(Icons.refresh,
+                                                  size: 18),
+                                              label: const Text('새로고침'),
+                                              style: OutlinedButton.styleFrom(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                        horizontal: 20,
+                                                        vertical: 12),
+                                              ),
                                             ),
                                           ),
-                                        );
-                                      }),
-                                    const Divider(height: 20),
-                                    Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 12, vertical: 4),
-                                      child: Align(
-                                        alignment: Alignment.centerLeft,
-                                        child: Text(
-                                          'Recent command events',
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                  Container(
+                                    margin: const EdgeInsets.only(top: 8.0),
+                                    child: Card(
+                                      child: ExpansionTile(
+                                        title: Text(
+                                          'Approvals & actions',
                                           style: TextStyle(
-                                            fontSize: 13,
+                                            fontSize: 15,
                                             fontWeight: FontWeight.w600,
                                             color: Theme.of(context)
                                                 .colorScheme
                                                 .onSurface,
                                           ),
                                         ),
-                                      ),
-                                    ),
-                                    if (_recentCommandEvents.isEmpty)
-                                      Padding(
-                                        padding: const EdgeInsets.fromLTRB(
-                                            12, 0, 12, 12),
-                                        child: Align(
-                                          alignment: Alignment.centerLeft,
-                                          child: Text(
-                                            '표시할 command event가 없습니다.',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .onSurfaceVariant,
-                                            ),
+                                        subtitle: Text(
+                                          'codex: ${_pendingCodexServerRequests.length} · relay: ${_pendingCommandApprovals.length}',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant,
                                           ),
                                         ),
-                                      )
-                                    else
-                                      ..._recentCommandEvents
-                                          .take(5)
-                                          .map((event) {
-                                        final result = event['result']
-                                                as Map<String, dynamic>? ??
-                                            {};
-                                        final command = event['command']
-                                                as Map<String, dynamic>? ??
-                                            {};
-                                        final approval = event['approval']
-                                                as Map<String, dynamic>? ??
-                                            {};
-                                        final risk = event['risk']
-                                                as Map<String, dynamic>? ??
-                                            {};
-                                        final status =
-                                            result['status']?.toString() ??
-                                                'unknown';
-                                        final raw =
-                                            command['raw']?.toString() ??
-                                                '(unknown)';
-                                        final approvalStatus =
-                                            approval['status']?.toString() ??
-                                                'not_required';
-                                        final riskLevel =
-                                            risk['level']?.toString() ?? 'low';
-                                        Color statusColor;
-                                        switch (status) {
-                                          case 'success':
-                                            statusColor = Colors.green;
-                                            break;
-                                          case 'error':
-                                          case 'cancelled':
-                                            statusColor = Colors.red;
-                                            break;
-                                          default:
-                                            statusColor = Colors.orange;
-                                        }
+                                        leading: Container(
+                                          padding: const EdgeInsets.all(6),
+                                          decoration: BoxDecoration(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .tertiaryContainer,
+                                            borderRadius:
+                                                BorderRadius.circular(8),
+                                          ),
+                                          child: Icon(
+                                            Icons.security,
+                                            size: 18,
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onTertiaryContainer,
+                                          ),
+                                        ),
+                                        children: [
+                                          Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 12, vertical: 8),
+                                            child: Wrap(
+                                              children: [
+                                                OutlinedButton.icon(
+                                                  onPressed: _isConnected
+                                                      ? () {
+                                                          _loadCommandApprovals();
+                                                          _loadCommandEvents();
+                                                        }
+                                                      : null,
+                                                  icon: const Icon(
+                                                      Icons.refresh,
+                                                      size: 16),
+                                                  label: const Text('새로고침'),
+                                                ),
+                                                const SizedBox(width: 8),
+                                                PopupMenuButton<
+                                                    AutoDecisionMode>(
+                                                  tooltip: 'Auto response mode',
+                                                  onSelected: (mode) {
+                                                    setState(() {
+                                                      _autoDecisionMode = mode;
+                                                    });
+                                                    final label =
+                                                        _autoDecisionModeLabel(
+                                                            mode);
+                                                    _messages.add(MessageItem(
+                                                        '⚙️ 승인 자동응답 모드: $label',
+                                                        type: MessageType
+                                                            .system));
+                                                    _scrollToBottom();
+                                                  },
+                                                  itemBuilder: (context) =>
+                                                      const [
+                                                    PopupMenuItem(
+                                                      value:
+                                                          AutoDecisionMode.off,
+                                                      child: Text('Manual'),
+                                                    ),
+                                                    PopupMenuItem(
+                                                      value: AutoDecisionMode
+                                                          .approve,
+                                                      child:
+                                                          Text('Auto-approve'),
+                                                    ),
+                                                    PopupMenuItem(
+                                                      value: AutoDecisionMode
+                                                          .reject,
+                                                      child:
+                                                          Text('Auto-reject'),
+                                                    ),
+                                                  ],
+                                                  child: Chip(
+                                                    label: Text(
+                                                        _autoDecisionModeLabel(
+                                                            _autoDecisionMode),
+                                                        style: const TextStyle(
+                                                            fontSize: 11)),
+                                                    avatar: const Icon(
+                                                        Icons.timer,
+                                                        size: 14),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 6),
+                                                PopupMenuButton<int>(
+                                                  tooltip:
+                                                      'Auto response timeout',
+                                                  onSelected: (seconds) {
+                                                    setState(() {
+                                                      _autoDecisionTimeoutSec =
+                                                          seconds;
+                                                    });
+                                                    _messages.add(MessageItem(
+                                                        '⚙️ 자동응답 대기시간: ${seconds}s',
+                                                        type: MessageType
+                                                            .system));
+                                                    _scrollToBottom();
+                                                  },
+                                                  itemBuilder: (context) =>
+                                                      const [
+                                                    PopupMenuItem(
+                                                        value: 10,
+                                                        child: Text('10s')),
+                                                    PopupMenuItem(
+                                                        value: 30,
+                                                        child: Text('30s')),
+                                                    PopupMenuItem(
+                                                        value: 60,
+                                                        child: Text('60s')),
+                                                  ],
+                                                  child: Chip(
+                                                    label: Text(
+                                                        '${_autoDecisionTimeoutSec}s',
+                                                        style: const TextStyle(
+                                                            fontSize: 11)),
+                                                    avatar: const Icon(
+                                                        Icons.schedule,
+                                                        size: 14),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 8),
+                                                if (_loadingCommandApprovals ||
+                                                    _loadingCommandEvents)
+                                                  const SizedBox(
+                                                    width: 16,
+                                                    height: 16,
+                                                    child:
+                                                        CircularProgressIndicator(
+                                                            strokeWidth: 2),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
+                                          Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 12, vertical: 4),
+                                            child: Align(
+                                              alignment: Alignment.centerLeft,
+                                              child: Text(
+                                                'Pending Codex requests',
+                                                style: TextStyle(
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurface,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          if (_pendingCodexServerRequests
+                                              .isEmpty)
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.fromLTRB(
+                                                      12, 0, 12, 8),
+                                              child: Align(
+                                                alignment: Alignment.centerLeft,
+                                                child: Text(
+                                                  '대기 중인 Codex 요청이 없습니다.',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .onSurfaceVariant,
+                                                  ),
+                                                ),
+                                              ),
+                                            )
+                                          else
+                                            ..._pendingCodexServerRequests
+                                                .take(5)
+                                                .map((request) {
+                                              final requestId =
+                                                  request['requestId']
+                                                          ?.toString() ??
+                                                      '';
+                                              final requestKind =
+                                                  request['requestKind']
+                                                          ?.toString() ??
+                                                      '';
+                                              final summary =
+                                                  _codexRequestSummary(request);
+                                              final detailLines =
+                                                  List<String>.from(
+                                                      (request['detailLines']
+                                                                  as List? ??
+                                                              [])
+                                                          .map((e) =>
+                                                              e.toString()));
+                                              final requestTimeLabel =
+                                                  _timestampLabelFromMap(
+                                                      request,
+                                                      preferredKeys: const [
+                                                    'timestamp',
+                                                    'created_at',
+                                                    'createdAt'
+                                                  ]);
+                                              final choices = List<
+                                                  Map<String,
+                                                      dynamic>>.from((request[
+                                                          'choices'] as List? ??
+                                                      [])
+                                                  .map((e) =>
+                                                      Map<String, dynamic>.from(
+                                                          e as Map)));
+                                              final isSubmitting =
+                                                  _submittingCodexRequestIds
+                                                      .contains(requestId);
+                                              final accentColor =
+                                                  _codexRequestAccentColor(
+                                                      context, request);
 
-                                        return ListTile(
-                                          dense: true,
-                                          leading: Icon(Icons.bolt,
-                                              size: 16, color: statusColor),
-                                          title: Text(
-                                            '$status • $raw',
-                                            style:
-                                                const TextStyle(fontSize: 12),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
+                                              return Card(
+                                                margin:
+                                                    const EdgeInsets.fromLTRB(
+                                                        12, 4, 12, 4),
+                                                elevation: 0,
+                                                shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(10),
+                                                  side: BorderSide(
+                                                    color: accentColor
+                                                        .withOpacity(0.35),
+                                                    width: 1.2,
+                                                  ),
+                                                ),
+                                                child: Padding(
+                                                  padding:
+                                                      const EdgeInsets.all(10),
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                      Container(
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .symmetric(
+                                                                horizontal: 10,
+                                                                vertical: 6),
+                                                        decoration:
+                                                            BoxDecoration(
+                                                          color: accentColor
+                                                              .withOpacity(
+                                                                  0.10),
+                                                          borderRadius:
+                                                              BorderRadius
+                                                                  .circular(
+                                                                      999),
+                                                        ),
+                                                        child: Row(
+                                                          mainAxisSize:
+                                                              MainAxisSize.min,
+                                                          children: [
+                                                            Icon(
+                                                              Icons
+                                                                  .notification_important_rounded,
+                                                              size: 14,
+                                                              color:
+                                                                  accentColor,
+                                                            ),
+                                                            const SizedBox(
+                                                                width: 6),
+                                                            Text(
+                                                              'Action required',
+                                                              style: TextStyle(
+                                                                fontSize: 11,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w700,
+                                                                color:
+                                                                    accentColor,
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                      const SizedBox(height: 8),
+                                                      Row(
+                                                        children: [
+                                                          Expanded(
+                                                            child: Text(
+                                                              _codexRequestTitle(
+                                                                  request),
+                                                              style:
+                                                                  const TextStyle(
+                                                                fontSize: 12,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w700,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                          Text(
+                                                            requestTimeLabel,
+                                                            style: TextStyle(
+                                                              fontSize: 10,
+                                                              color: Theme.of(
+                                                                      context)
+                                                                  .colorScheme
+                                                                  .onSurfaceVariant,
+                                                            ),
+                                                          ),
+                                                          IconButton(
+                                                            icon: const Icon(
+                                                                Icons
+                                                                    .open_in_new,
+                                                                size: 16),
+                                                            tooltip: 'Detail',
+                                                            visualDensity:
+                                                                VisualDensity
+                                                                    .compact,
+                                                            onPressed: () {
+                                                              _showCodexRequestDetailSheet(
+                                                                  request);
+                                                            },
+                                                          ),
+                                                        ],
+                                                      ),
+                                                      if (summary
+                                                          .isNotEmpty) ...[
+                                                        const SizedBox(
+                                                            height: 4),
+                                                        Text(
+                                                          summary,
+                                                          style:
+                                                              const TextStyle(
+                                                            fontSize: 11,
+                                                            fontFamily:
+                                                                'monospace',
+                                                          ),
+                                                        ),
+                                                      ],
+                                                      if (detailLines
+                                                          .isNotEmpty) ...[
+                                                        const SizedBox(
+                                                            height: 6),
+                                                        ...detailLines
+                                                            .take(3)
+                                                            .map(
+                                                              (line) => Padding(
+                                                                padding:
+                                                                    const EdgeInsets
+                                                                        .only(
+                                                                        bottom:
+                                                                            2),
+                                                                child: Text(
+                                                                  line,
+                                                                  style:
+                                                                      TextStyle(
+                                                                    fontSize:
+                                                                        11,
+                                                                    color: Theme.of(
+                                                                            context)
+                                                                        .colorScheme
+                                                                        .onSurfaceVariant,
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                      ],
+                                                      const SizedBox(height: 4),
+                                                      Text(
+                                                        '모바일에서 버튼을 눌러야 계속 진행됩니다.',
+                                                        style: TextStyle(
+                                                          fontSize: 11,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          color: accentColor,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(height: 8),
+                                                      if (requestKind ==
+                                                          'user_input')
+                                                        Row(
+                                                          children: [
+                                                            Expanded(
+                                                              child:
+                                                                  FilledButton(
+                                                                onPressed:
+                                                                    isSubmitting
+                                                                        ? null
+                                                                        : () {
+                                                                            _openCodexUserInputDialog(request);
+                                                                          },
+                                                                child: Text(isSubmitting
+                                                                    ? 'Sending...'
+                                                                    : 'Respond'),
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        )
+                                                      else
+                                                        Wrap(
+                                                          spacing: 8,
+                                                          runSpacing: 8,
+                                                          children: choices
+                                                              .map((choice) {
+                                                            final label = choice[
+                                                                        'label']
+                                                                    ?.toString() ??
+                                                                'Respond';
+                                                            final style = choice[
+                                                                        'style']
+                                                                    ?.toString() ??
+                                                                'secondary';
+                                                            final responsePayload = Map<
+                                                                    String,
+                                                                    dynamic>.from(
+                                                                choice['response']
+                                                                        as Map? ??
+                                                                    {});
+                                                            final buttonChild =
+                                                                Text(isSubmitting
+                                                                    ? 'Sending...'
+                                                                    : label);
+                                                            if (style ==
+                                                                'primary') {
+                                                              return FilledButton(
+                                                                onPressed:
+                                                                    isSubmitting
+                                                                        ? null
+                                                                        : () {
+                                                                            _submitCodexDecision(request,
+                                                                                responsePayload);
+                                                                          },
+                                                                child:
+                                                                    buttonChild,
+                                                              );
+                                                            }
+                                                            return OutlinedButton(
+                                                              onPressed:
+                                                                  isSubmitting
+                                                                      ? null
+                                                                      : () {
+                                                                          _submitCodexDecision(
+                                                                              request,
+                                                                              responsePayload);
+                                                                        },
+                                                              style: style ==
+                                                                      'danger'
+                                                                  ? OutlinedButton
+                                                                      .styleFrom(
+                                                                      foregroundColor: Theme.of(
+                                                                              context)
+                                                                          .colorScheme
+                                                                          .error,
+                                                                    )
+                                                                  : null,
+                                                              child:
+                                                                  buttonChild,
+                                                            );
+                                                          }).toList(),
+                                                        ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              );
+                                            }),
+                                          const Divider(height: 20),
+                                          Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 12, vertical: 4),
+                                            child: Align(
+                                              alignment: Alignment.centerLeft,
+                                              child: Text(
+                                                'Pending approvals',
+                                                style: TextStyle(
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurface,
+                                                ),
+                                              ),
+                                            ),
                                           ),
-                                          subtitle: Text(
-                                            'risk: $riskLevel · approval: $approvalStatus',
-                                            style:
-                                                const TextStyle(fontSize: 11),
+                                          if (_pendingCommandApprovals.isEmpty)
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.fromLTRB(
+                                                      12, 0, 12, 8),
+                                              child: Align(
+                                                alignment: Alignment.centerLeft,
+                                                child: Text(
+                                                  '대기 중인 승인 요청이 없습니다.',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .onSurfaceVariant,
+                                                  ),
+                                                ),
+                                              ),
+                                            )
+                                          else
+                                            ..._pendingCommandApprovals
+                                                .take(5)
+                                                .map((approval) {
+                                              final commandRaw =
+                                                  _approvalCommandRaw(approval);
+                                              final requestType =
+                                                  _approvalRequestTypeLabel(
+                                                      approval);
+                                              final requestedBy =
+                                                  _approvalRequestedBy(
+                                                      approval);
+                                              final cwd =
+                                                  _approvalWorkingDirectory(
+                                                      approval);
+                                              final policy = approval['policy']
+                                                      as Map<String,
+                                                          dynamic>? ??
+                                                  {};
+                                              final createdAtLabel =
+                                                  _timestampLabelFromMap(
+                                                      approval);
+                                              final riskLevel =
+                                                  policy['risk_level']
+                                                          ?.toString() ??
+                                                      'unknown';
+                                              final reasons =
+                                                  (policy['reasons'] as List? ??
+                                                          [])
+                                                      .map((e) => e.toString())
+                                                      .join(', ');
+                                              return Card(
+                                                margin:
+                                                    const EdgeInsets.fromLTRB(
+                                                        12, 4, 12, 4),
+                                                elevation: 0,
+                                                shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(10),
+                                                  side: BorderSide(
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .outline
+                                                        .withOpacity(0.2),
+                                                  ),
+                                                ),
+                                                child: Padding(
+                                                  padding:
+                                                      const EdgeInsets.all(10),
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                      Row(
+                                                        children: [
+                                                          Expanded(
+                                                            child: Column(
+                                                              crossAxisAlignment:
+                                                                  CrossAxisAlignment
+                                                                      .start,
+                                                              children: [
+                                                                Text(
+                                                                  requestType,
+                                                                  style:
+                                                                      TextStyle(
+                                                                    fontSize:
+                                                                        10,
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .w700,
+                                                                    color: Theme.of(
+                                                                            context)
+                                                                        .colorScheme
+                                                                        .onSurfaceVariant,
+                                                                  ),
+                                                                ),
+                                                                const SizedBox(
+                                                                    height: 2),
+                                                                Text(
+                                                                  commandRaw,
+                                                                  style:
+                                                                      const TextStyle(
+                                                                    fontSize:
+                                                                        12,
+                                                                    fontFamily:
+                                                                        'monospace',
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .w600,
+                                                                  ),
+                                                                ),
+                                                                const SizedBox(
+                                                                    height: 2),
+                                                                Text(
+                                                                  createdAtLabel,
+                                                                  style:
+                                                                      TextStyle(
+                                                                    fontSize:
+                                                                        10,
+                                                                    color: Theme.of(
+                                                                            context)
+                                                                        .colorScheme
+                                                                        .onSurfaceVariant,
+                                                                  ),
+                                                                ),
+                                                                const SizedBox(
+                                                                    height: 2),
+                                                                Text(
+                                                                  'by $requestedBy${cwd.isNotEmpty ? ' · $cwd' : ''}',
+                                                                  maxLines: 1,
+                                                                  overflow:
+                                                                      TextOverflow
+                                                                          .ellipsis,
+                                                                  style:
+                                                                      TextStyle(
+                                                                    fontSize:
+                                                                        10,
+                                                                    color: Theme.of(
+                                                                            context)
+                                                                        .colorScheme
+                                                                        .onSurfaceVariant,
+                                                                  ),
+                                                                ),
+                                                              ],
+                                                            ),
+                                                          ),
+                                                          Container(
+                                                            padding:
+                                                                const EdgeInsets
+                                                                    .symmetric(
+                                                                    horizontal:
+                                                                        8,
+                                                                    vertical:
+                                                                        2),
+                                                            decoration:
+                                                                BoxDecoration(
+                                                              color: _riskColor(
+                                                                      riskLevel)
+                                                                  .withOpacity(
+                                                                      0.14),
+                                                              borderRadius:
+                                                                  BorderRadius
+                                                                      .circular(
+                                                                          12),
+                                                            ),
+                                                            child: Text(
+                                                              riskLevel,
+                                                              style: TextStyle(
+                                                                fontSize: 10,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w700,
+                                                                color: _riskColor(
+                                                                    riskLevel),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                      if (reasons
+                                                          .isNotEmpty) ...[
+                                                        const SizedBox(
+                                                            height: 4),
+                                                        Text(
+                                                          reasons,
+                                                          style: TextStyle(
+                                                            fontSize: 11,
+                                                            color: Theme.of(
+                                                                    context)
+                                                                .colorScheme
+                                                                .onSurfaceVariant,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                      Align(
+                                                        alignment: Alignment
+                                                            .centerRight,
+                                                        child: TextButton.icon(
+                                                          onPressed: () {
+                                                            _showRelayApprovalDetailSheet(
+                                                                approval);
+                                                          },
+                                                          icon: const Icon(
+                                                              Icons.open_in_new,
+                                                              size: 16),
+                                                          label: const Text(
+                                                              'Detail'),
+                                                        ),
+                                                      ),
+                                                      const SizedBox(height: 8),
+                                                      Row(
+                                                        children: [
+                                                          Expanded(
+                                                            child: TextButton(
+                                                              onPressed: () {
+                                                                _markRelayApprovalLater(
+                                                                    approval);
+                                                              },
+                                                              child: const Text(
+                                                                  'Later'),
+                                                            ),
+                                                          ),
+                                                          const SizedBox(
+                                                              width: 8),
+                                                          Expanded(
+                                                            child:
+                                                                OutlinedButton(
+                                                              onPressed:
+                                                                  () async {
+                                                                await _confirmAndResolveApproval(
+                                                                    approval,
+                                                                    'reject');
+                                                              },
+                                                              child: const Text(
+                                                                  'Reject'),
+                                                            ),
+                                                          ),
+                                                          const SizedBox(
+                                                              width: 8),
+                                                          Expanded(
+                                                            child: FilledButton(
+                                                              onPressed:
+                                                                  () async {
+                                                                await _confirmAndResolveApproval(
+                                                                    approval,
+                                                                    'approve');
+                                                              },
+                                                              child: const Text(
+                                                                  'Approve'),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              );
+                                            }),
+                                          const Divider(height: 20),
+                                          Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 12, vertical: 4),
+                                            child: Align(
+                                              alignment: Alignment.centerLeft,
+                                              child: Text(
+                                                'Recent command events',
+                                                style: TextStyle(
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurface,
+                                                ),
+                                              ),
+                                            ),
                                           ),
-                                        );
-                                      }),
-                                    const SizedBox(height: 8),
-                                  ],
-                                ),
-                              ),
+                                          if (_recentCommandEvents.isEmpty)
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.fromLTRB(
+                                                      12, 0, 12, 12),
+                                              child: Align(
+                                                alignment: Alignment.centerLeft,
+                                                child: Text(
+                                                  '표시할 command event가 없습니다.',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .onSurfaceVariant,
+                                                  ),
+                                                ),
+                                              ),
+                                            )
+                                          else
+                                            ..._recentCommandEvents
+                                                .take(5)
+                                                .map((event) {
+                                              final result = event['result']
+                                                      as Map<String,
+                                                          dynamic>? ??
+                                                  {};
+                                              final command = event['command']
+                                                      as Map<String,
+                                                          dynamic>? ??
+                                                  {};
+                                              final approval = event['approval']
+                                                      as Map<String,
+                                                          dynamic>? ??
+                                                  {};
+                                              final risk = event['risk'] as Map<
+                                                      String, dynamic>? ??
+                                                  {};
+                                              final status = result['status']
+                                                      ?.toString() ??
+                                                  'unknown';
+                                              final raw =
+                                                  command['raw']?.toString() ??
+                                                      '(unknown)';
+                                              final approvalStatus =
+                                                  _deriveApprovalStatusFromEvent(
+                                                        event,
+                                                      ) ??
+                                                      approval['status']
+                                                          ?.toString()
+                                                          .toLowerCase()
+                                                          .trim() ??
+                                                      'not_required';
+                                              final riskLevel =
+                                                  risk['level']?.toString() ??
+                                                      'low';
+                                              Color statusColor;
+                                              switch (status) {
+                                                case 'success':
+                                                  statusColor = Colors.green;
+                                                  break;
+                                                case 'error':
+                                                case 'cancelled':
+                                                  statusColor = Colors.red;
+                                                  break;
+                                                default:
+                                                  statusColor = Colors.orange;
+                                              }
+
+                                              return ListTile(
+                                                dense: true,
+                                                leading: Icon(Icons.bolt,
+                                                    size: 16,
+                                                    color: statusColor),
+                                                title: Text(
+                                                  '$status • $raw',
+                                                  style: const TextStyle(
+                                                      fontSize: 12),
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                                subtitle: Text(
+                                                  'risk: $riskLevel · approval: $approvalStatus',
+                                                  style: const TextStyle(
+                                                      fontSize: 11),
+                                                ),
+                                              );
+                                            }),
+                                          const Divider(height: 20),
+                                          Builder(builder: (context) {
+                                            final timelineEntries =
+                                                _buildDecisionTimelineEntries()
+                                                    .take(8)
+                                                    .toList();
+                                            return Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Padding(
+                                                  padding: const EdgeInsets
+                                                      .symmetric(
+                                                      horizontal: 12,
+                                                      vertical: 4),
+                                                  child: Text(
+                                                    'Decision timeline',
+                                                    style: TextStyle(
+                                                      fontSize: 13,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                      color: Theme.of(context)
+                                                          .colorScheme
+                                                          .onSurface,
+                                                    ),
+                                                  ),
+                                                ),
+                                                if (timelineEntries.isEmpty)
+                                                  Padding(
+                                                    padding: const EdgeInsets
+                                                        .fromLTRB(12, 0, 12, 8),
+                                                    child: Text(
+                                                      '표시할 타임라인이 없습니다.',
+                                                      style: TextStyle(
+                                                        fontSize: 12,
+                                                        color: Theme.of(context)
+                                                            .colorScheme
+                                                            .onSurfaceVariant,
+                                                      ),
+                                                    ),
+                                                  )
+                                                else
+                                                  ...timelineEntries
+                                                      .map((entry) {
+                                                    final kind = entry['kind']
+                                                            ?.toString() ??
+                                                        '';
+                                                    final title = entry['title']
+                                                            ?.toString() ??
+                                                        '';
+                                                    final subtitle =
+                                                        entry['subtitle']
+                                                                ?.toString() ??
+                                                            '';
+                                                    final time = entry['time']
+                                                            as DateTime? ??
+                                                        DateTime.now();
+                                                    return ListTile(
+                                                      dense: true,
+                                                      onTap: () {
+                                                        _showTimelineEntryDetailSheet(
+                                                            entry);
+                                                      },
+                                                      leading: Icon(
+                                                        _timelineIcon(
+                                                            kind, title),
+                                                        size: 16,
+                                                      ),
+                                                      title: Text(
+                                                        title,
+                                                        style: const TextStyle(
+                                                            fontSize: 12),
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                      ),
+                                                      subtitle: Text(
+                                                        '$subtitle · ${_formatTime(time)}',
+                                                        style: const TextStyle(
+                                                            fontSize: 11),
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                      ),
+                                                    );
+                                                  }),
+                                              ],
+                                            );
+                                          }),
+                                          const SizedBox(height: 8),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
                             ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-    );
-  }
-}
-
-// ============================================================
-// 설정 화면
-// ============================================================
-class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key});
-
-  @override
-  State<SettingsPage> createState() => _SettingsPageState();
-}
-
-class _SettingsPageState extends State<SettingsPage> {
-  final AppSettings _settings = AppSettings();
-
-  @override
-  void initState() {
-    super.initState();
-    _settings.addListener(_onSettingsChanged);
-  }
-
-  @override
-  void dispose() {
-    _settings.removeListener(_onSettingsChanged);
-    super.dispose();
-  }
-
-  void _onSettingsChanged() {
-    setState(() {});
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text(
-          '설정',
-          style: TextStyle(fontWeight: FontWeight.w600),
-        ),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ))
+            : _selectedHomeTab == HomeTab.approvals
+                ? _buildApprovalsTabBody()
+                : _selectedHomeTab == HomeTab.sessions
+                    ? _buildSessionsTabBody()
+                    : _buildSettingsTabBody(),
       ),
-      body: ListView(
-        children: [
-          // 외관 섹션
-          _buildSectionHeader('외관'),
-          _buildThemeModeTile(),
-          const Divider(),
-
-          // 기능 섹션
-          _buildSectionHeader('기능'),
-          _buildShowHistoryTile(),
-          const Divider(),
-
-          // 정보 섹션
-          _buildSectionHeader('정보'),
-          _buildAboutTile(),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: HomeTab.values.indexOf(_selectedHomeTab),
+        onDestinationSelected: (index) {
+          unawaited(_selectHomeTab(HomeTab.values[index]));
+        },
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.chat_bubble_outline),
+            selectedIcon: Icon(Icons.chat_bubble),
+            label: 'Chat',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.gpp_good_outlined),
+            selectedIcon: Icon(Icons.gpp_good),
+            label: 'Approvals',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.hub_outlined),
+            selectedIcon: Icon(Icons.hub),
+            label: 'Sessions',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.settings_outlined),
+            selectedIcon: Icon(Icons.settings),
+            label: 'Settings',
+          ),
         ],
       ),
-    );
-  }
-
-  Widget _buildSectionHeader(String title) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      child: Text(
-        title,
-        style: TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
-          color: Theme.of(context).colorScheme.primary,
-          letterSpacing: 0.5,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildThemeModeTile() {
-    return ListTile(
-      leading: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.primaryContainer,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Icon(
-          _getThemeIcon(_settings.themeMode),
-          color: Theme.of(context).colorScheme.onPrimaryContainer,
-          size: 20,
-        ),
-      ),
-      title: const Text('테마'),
-      subtitle: Text(_getThemeModeLabel(_settings.themeMode)),
-      trailing: const Icon(Icons.chevron_right),
-      onTap: () => _showThemeModeDialog(),
-    );
-  }
-
-  IconData _getThemeIcon(ThemeModeSetting mode) {
-    switch (mode) {
-      case ThemeModeSetting.light:
-        return Icons.light_mode;
-      case ThemeModeSetting.dark:
-        return Icons.dark_mode;
-      case ThemeModeSetting.system:
-        return Icons.brightness_auto;
-    }
-  }
-
-  String _getThemeModeLabel(ThemeModeSetting mode) {
-    switch (mode) {
-      case ThemeModeSetting.light:
-        return '라이트 모드';
-      case ThemeModeSetting.dark:
-        return '다크 모드';
-      case ThemeModeSetting.system:
-        return '시스템 설정';
-    }
-  }
-
-  void _showThemeModeDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('테마 선택'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: ThemeModeSetting.values.map((mode) {
-            return RadioListTile<ThemeModeSetting>(
-              title: Row(
-                children: [
-                  Icon(_getThemeIcon(mode), size: 20),
-                  const SizedBox(width: 12),
-                  Text(_getThemeModeLabel(mode)),
-                ],
-              ),
-              value: mode,
-              groupValue: _settings.themeMode,
-              onChanged: (value) {
-                if (value != null) {
-                  _settings.setThemeMode(value);
-                  Navigator.of(context).pop();
-                }
-              },
-            );
-          }).toList(),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildShowHistoryTile() {
-    return SwitchListTile(
-      secondary: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.secondaryContainer,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Icon(
-          Icons.history,
-          color: Theme.of(context).colorScheme.onSecondaryContainer,
-          size: 20,
-        ),
-      ),
-      title: const Text('세션 및 대화 히스토리'),
-      subtitle: const Text('메인 화면에 히스토리 섹션 표시'),
-      value: _settings.showHistory,
-      onChanged: (value) => _settings.setShowHistory(value),
-    );
-  }
-
-  Widget _buildAboutTile() {
-    return ListTile(
-      leading: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Icon(
-          Icons.info_outline,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-          size: 20,
-        ),
-      ),
-      title: const Text('Codex Remote'),
-      subtitle: const Text('버전 0.1.0'),
-      onTap: () => _showAboutDialog(),
-    );
-  }
-
-  void _showAboutDialog() {
-    showAboutDialog(
-      context: context,
-      applicationName: 'Codex Remote',
-      applicationVersion: '0.1.0',
-      applicationIcon: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.primaryContainer,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Icon(
-          Icons.code,
-          size: 32,
-          color: Theme.of(context).colorScheme.onPrimaryContainer,
-        ),
-      ),
-      children: [
-        const SizedBox(height: 16),
-        const Text(
-          '모바일에서 Codex를 원격으로 제어하세요.',
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 8),
-        Text(
-          '© 2026 jaloveeye',
-          style: TextStyle(
-            fontSize: 12,
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          ),
-          textAlign: TextAlign.center,
-        ),
-      ],
     );
   }
 }

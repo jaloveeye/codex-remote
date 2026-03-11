@@ -56,6 +56,7 @@ Local relay URL: `http://localhost:3000`
 ### Main API endpoints
 
 - `GET /api/health`
+- `GET /api/version`
 - `GET /api/store`
 - `POST /api/session`
 - `POST /api/connect`
@@ -130,6 +131,7 @@ npm run dev
 ### 주요 API 엔드포인트
 
 - `GET /api/health`
+- `GET /api/version`
 - `GET /api/store`
 - `POST /api/session`
 - `POST /api/connect`

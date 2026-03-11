@@ -11,6 +11,16 @@ enum ThemeModeSetting {
   system,
 }
 
+class RuntimeCapabilitiesCache {
+  const RuntimeCapabilitiesCache({
+    required this.capabilities,
+    required this.cachedAt,
+  });
+
+  final Map<String, dynamic> capabilities;
+  final DateTime cachedAt;
+}
+
 class AppSettings extends ChangeNotifier {
   static final AppSettings _instance = AppSettings._internal();
   factory AppSettings() => _instance;
@@ -24,6 +34,8 @@ class AppSettings extends ChangeNotifier {
   static const String _keyDefaultReasoningEffort = 'default_reasoning_effort';
   static const String _keyAutoConnect = 'auto_connect';
   static const String _keyConnectionHistory = 'connection_history';
+  static const String _keyRuntimeCapabilitiesCache =
+      'runtime_capabilities_cache';
 
   // 최대 히스토리 개수
   static const int _maxHistoryCount = 5;
@@ -177,5 +189,42 @@ class AppSettings extends ChangeNotifier {
     _connectionHistory.clear();
     await _saveConnectionHistory();
     notifyListeners();
+  }
+
+  Future<void> saveRuntimeCapabilitiesCache(
+      Map<String, dynamic> capabilities) async {
+    final prefs = await SharedPreferences.getInstance();
+    final payload = {
+      'cachedAt': DateTime.now().toIso8601String(),
+      'capabilities': capabilities,
+    };
+    await prefs.setString(_keyRuntimeCapabilitiesCache, jsonEncode(payload));
+  }
+
+  Future<RuntimeCapabilitiesCache?> getRuntimeCapabilitiesCache({
+    Duration maxAge = const Duration(hours: 24),
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_keyRuntimeCapabilitiesCache);
+    if (raw == null || raw.isEmpty) return null;
+
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return null;
+      final cachedAtRaw = decoded['cachedAt']?.toString();
+      final capabilitiesRaw = decoded['capabilities'];
+      if (cachedAtRaw == null || capabilitiesRaw is! Map) return null;
+
+      final cachedAt = DateTime.tryParse(cachedAtRaw);
+      if (cachedAt == null) return null;
+      if (DateTime.now().difference(cachedAt) > maxAge) return null;
+
+      return RuntimeCapabilitiesCache(
+        capabilities: Map<String, dynamic>.from(capabilitiesRaw),
+        cachedAt: cachedAt,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 }

@@ -2,7 +2,7 @@
   "name": "codex-remote-extension",
   "displayName": "Codex Remote",
   "description": "Remote control Codex from your mobile device via WebSocket or Relay Server",
-  "version": "0.1.3",
+  "version": "0.1.6",
   "publisher": "jaloveeye",
   "license": "MIT",
   "repository": {
@@ -80,6 +80,18 @@
           "scope": "application",
           "default": "https://relay.example.com",
           "description": "Base URL of the dedicated relay server used for remote sessions."
+        },
+        "codexRemote.iosAppStoreUrl": {
+          "type": "string",
+          "scope": "application",
+          "default": "",
+          "description": "iOS 앱스토어 링크. 미등록 시 빈 값으로 둡니다."
+        },
+        "codexRemote.androidPlayStoreUrl": {
+          "type": "string",
+          "scope": "application",
+          "default": "",
+          "description": "Android Play 스토어 링크. 미등록 시 빈 값으로 둡니다."
         }
       }
     }

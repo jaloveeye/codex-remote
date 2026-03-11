@@ -37,7 +37,19 @@ target 'Runner' do
 end
 
 post_install do |installer|
+  host_is_x86_64 = (`uname -m`.strip == 'x86_64')
+
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+
+    # Intel Mac (x86_64)에서 시뮬레이터가 x86_64로만 동작할 때,
+    # Runner가 arm64로만 빌드되는 문제를 방지하기 위해 simulator 대상에서 arm64를 제외한다.
+    if host_is_x86_64
+      target.build_configurations.each do |config|
+        current = config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] || ''
+        list = current.split(/\s+/).reject(&:empty?) + ['arm64', 'i386']
+        config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = list.uniq.join(' ')
+      end
+    end
   end
 end

@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { ApiResponse } from '../lib/types.js';
+import { RELAY_SERVER_VERSION } from '../lib/version.js';
 
 export default async function handler(
   req: VercelRequest,
@@ -37,7 +38,7 @@ export default async function handler(
     success: true,
     data: {
       status: 'healthy',
-      version: '1.0.0',
+      version: RELAY_SERVER_VERSION,
       store: useSupabase ? 'supabase' : 'redis',
       ...(useSupabase
         ? { supabase: { urlSet: true, keySet: hasSupabaseKey } }

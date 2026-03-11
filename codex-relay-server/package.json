@@ -1,6 +1,6 @@
 {
   "name": "codex-relay-server",
-  "version": "1.0.0",
+  "version": "0.1.6",
   "description": "Codex Relay Server for Vercel",
   "private": true,
   "type": "module",

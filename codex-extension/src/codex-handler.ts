@@ -548,6 +548,9 @@ export class CodexHandler {
       this.getNested(objectParams, "item", "threadId"),
       this.getNested(objectParams, "item", "thread_id"),
       this.getNested(objectParams, "item", "conversationId"),
+      this.getNested(objectParams, "msg", "threadId"),
+      this.getNested(objectParams, "msg", "thread_id"),
+      this.getNested(objectParams, "msg", "conversationId"),
     ];
 
     for (const candidate of directCandidates) {
@@ -567,6 +570,8 @@ export class CodexHandler {
       this.getNested(objectParams, "turn", "id"),
       this.getNested(objectParams, "item", "turnId"),
       this.getNested(objectParams, "item", "turn_id"),
+      this.getNested(objectParams, "msg", "turnId"),
+      this.getNested(objectParams, "msg", "turn_id"),
     ];
 
     for (const candidate of candidates) {
@@ -590,6 +595,9 @@ export class CodexHandler {
       this.getNested(objectParams, "agentMessage", "text"),
       this.getNested(objectParams, "data", "delta"),
       this.getNested(objectParams, "data", "text"),
+      this.getNested(objectParams, "msg", "delta"),
+      this.getNested(objectParams, "msg", "text"),
+      this.getNested(objectParams, "msg", "message"),
     ];
 
     for (const candidate of candidates) {
@@ -1225,25 +1233,17 @@ export class CodexHandler {
         });
       }
 
-      try {
-        return await this.requestRemoteServerResponse(
-          legacy ? "execCommandApproval" : "item/commandExecution/requestApproval",
-          params,
-          {
-            requestKind: "command_execution",
-            title: "Codex wants to run a command",
-            summary: command,
-            detailLines,
-            choices: remoteChoices,
-          }
-        );
-      } catch (error) {
-        this.notifyRemoteApprovalStatus(
-          "Mobile approval did not complete in time. Falling back to VS Code desktop.",
-          params,
-          "error"
-        );
-      }
+      return await this.requestRemoteServerResponse(
+        legacy ? "execCommandApproval" : "item/commandExecution/requestApproval",
+        params,
+        {
+          requestKind: "command_execution",
+          title: "Codex wants to run a command",
+          summary: command,
+          detailLines,
+          choices: remoteChoices,
+        }
+      );
     }
 
     this.notifyRemoteApprovalStatus(
@@ -1324,28 +1324,20 @@ export class CodexHandler {
         },
       ];
 
-      try {
-        return await this.requestRemoteServerResponse(
-          legacy ? "applyPatchApproval" : "item/fileChange/requestApproval",
-          params,
-          {
-            requestKind: "file_change",
-            title: "Codex wants to modify files",
-            summary:
-              changeCount != null
-                ? `${changeCount} file(s) will be changed`
-                : "Codex requested file changes",
-            detailLines,
-            choices: remoteChoices,
-          }
-        );
-      } catch (error) {
-        this.notifyRemoteApprovalStatus(
-          "Mobile file approval did not complete in time. Falling back to VS Code desktop.",
-          params,
-          "error"
-        );
-      }
+      return await this.requestRemoteServerResponse(
+        legacy ? "applyPatchApproval" : "item/fileChange/requestApproval",
+        params,
+        {
+          requestKind: "file_change",
+          title: "Codex wants to modify files",
+          summary:
+            changeCount != null
+              ? `${changeCount} file(s) will be changed`
+              : "Codex requested file changes",
+          detailLines,
+          choices: remoteChoices,
+        }
+      );
     }
 
     this.notifyRemoteApprovalStatus(
@@ -1392,25 +1384,17 @@ export class CodexHandler {
     }
 
     if (this.shouldUseRemoteServerRequestFlow(params)) {
-      try {
-        return await this.requestRemoteServerResponse(
-          "item/tool/requestUserInput",
-          params,
-          {
-            requestKind: "user_input",
-            title: "Codex needs more input",
-            summary: `${rawQuestions.length} additional question(s)`,
-            questions: rawQuestions,
-            choices: [],
-          }
-        );
-      } catch (error) {
-        this.notifyRemoteApprovalStatus(
-          "Mobile user input was not completed in time. Falling back to VS Code desktop.",
-          params,
-          "error"
-        );
-      }
+      return await this.requestRemoteServerResponse(
+        "item/tool/requestUserInput",
+        params,
+        {
+          requestKind: "user_input",
+          title: "Codex needs more input",
+          summary: `${rawQuestions.length} additional question(s)`,
+          questions: rawQuestions,
+          choices: [],
+        }
+      );
     }
 
     this.notifyRemoteApprovalStatus(
@@ -1487,11 +1471,21 @@ export class CodexHandler {
     const isAgentDelta =
       normalized === "item/agentmessage/delta" ||
       normalized.endsWith("/item/agentmessage/delta") ||
+      normalized.includes("agent_message_content_delta") ||
       key.includes("itemagentmessagedelta") ||
-      key.includes("agentmessagedelta");
+      key.includes("agentmessagedelta") ||
+      key.includes("agentmessagecontentdelta");
 
     if (isAgentDelta) {
       this.handleAgentDelta(params);
+      return;
+    }
+
+    const isAgentMessageSnapshot =
+      normalized.endsWith("/agent_message") || key.endsWith("agentmessage");
+
+    if (isAgentMessageSnapshot) {
+      this.handleAgentMessageSnapshot(params);
       return;
     }
 
@@ -1530,6 +1524,8 @@ export class CodexHandler {
       return;
     }
 
+    this.forwardRawCodexNotification(method, params);
+
     if (key.includes("turn") || key.includes("agent") || key.includes("error")) {
       this.log(
         `[CODEX] ignored rpc notification method=${method}, params=${JSON.stringify(
@@ -1537,6 +1533,24 @@ export class CodexHandler {
         ).substring(0, 300)}`
       );
     }
+  }
+
+  private forwardRawCodexNotification(method: string, params: unknown): void {
+    if (!this.wsServer) return;
+    const clientId = this.resolveClientIdFromParams(params);
+    const state = clientId ? this.clientTurnStates.get(clientId) : null;
+    this.wsServer.send(
+      JSON.stringify({
+        type: "codex_raw_notification",
+        method,
+        params,
+        timestamp: new Date().toISOString(),
+        source: "codex",
+        clientId: clientId || undefined,
+        sessionId: state?.threadId,
+        targetDeviceId: state?.senderDeviceId || undefined,
+      })
+    );
   }
 
   private handleAgentDelta(params: unknown): void {
@@ -1559,6 +1573,35 @@ export class CodexHandler {
         text: delta,
         fullText: state.accumulatedText,
         isReplace: false,
+        timestamp: new Date().toISOString(),
+        source: "codex",
+        sessionId: state.threadId,
+        clientId,
+        targetDeviceId: state.senderDeviceId || undefined,
+      })
+    );
+  }
+
+  private handleAgentMessageSnapshot(params: unknown): void {
+    const clientId = this.resolveClientIdFromParams(params);
+    if (!clientId) return;
+
+    const state = this.clientTurnStates.get(clientId);
+    if (!state || !this.wsServer) return;
+
+    const messageText = this.extractCompletionText(params, 0).trim();
+    if (!messageText || messageText === state.accumulatedText) return;
+
+    state.accumulatedText = messageText;
+    state.hasChunks = true;
+    this.clientTurnStates.set(clientId, state);
+
+    this.wsServer.send(
+      JSON.stringify({
+        type: "chat_response_chunk",
+        text: messageText,
+        fullText: messageText,
+        isReplace: true,
         timestamp: new Date().toISOString(),
         source: "codex",
         sessionId: state.threadId,
@@ -1745,7 +1788,7 @@ export class CodexHandler {
       {
         clientInfo: {
           name: "codex-remote-extension",
-          version: "0.4.5",
+          version: "0.1.6",
         },
         capabilities: {},
       },
@@ -1900,6 +1943,7 @@ export class CodexHandler {
   }
 
   async getRuntimeCapabilities(): Promise<CodexRuntimeCapabilities> {
+    const startedAt = Date.now();
     const base: CodexRuntimeCapabilities = {
       provider: "codex",
       ready: false,
@@ -1924,20 +1968,25 @@ export class CodexHandler {
     };
 
     try {
+      const ensureStartedAt = Date.now();
       await this.ensureServerReady();
+      const ensureElapsedMs = Date.now() - ensureStartedAt;
+      const modelListStartedAt = Date.now();
       const modelResult = await this.sendRpcRequest(
         "model/list",
         { includeHidden: false, limit: 100 },
         15000
       );
+      const modelListElapsedMs = Date.now() - modelListStartedAt;
       const models = this.parseModelCapabilities(modelResult);
       const defaultModel =
         models.find((item) => item.isDefault) || models[0] || null;
+      const totalElapsedMs = Date.now() - startedAt;
 
       this.log(
         `[CODEX] runtime capabilities loaded - models: ${models.length}, default: ${
           defaultModel?.model || "none"
-        }`
+        }, ensureReady=${ensureElapsedMs}ms, modelList=${modelListElapsedMs}ms, total=${totalElapsedMs}ms`
       );
       if (models.length > 0) {
         this.log(
@@ -1965,8 +2014,13 @@ export class CodexHandler {
         },
       };
     } catch (error) {
+      const totalElapsedMs = Date.now() - startedAt;
       const errorMessage =
         error instanceof Error ? error.message : "Unknown capability error";
+      this.logError(
+        `Runtime capability load failed after ${totalElapsedMs}ms`,
+        error
+      );
       this.logError("Failed to load runtime capabilities", error);
       return {
         ...base,
