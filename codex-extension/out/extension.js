@@ -103,6 +103,8 @@ function getConnectionsViewHtml(data) {
     const codexCheckedAtLine = codexCliStatus.checkedAt != null
         ? `<p class="relay-meta"><strong>마지막 확인:</strong> ${escapeHtml(new Date(codexCliStatus.checkedAt).toLocaleString())}</p>`
         : "";
+    const iosAppStoreButton = `<button type="button" data-action="openIosAppStore" ${data.iosAppStoreUrl == null ? "disabled title=\"준비 중\"" : ""}>iOS 앱</button>`;
+    const androidAppStoreButton = `<button type="button" data-action="openAndroidPlayStore" ${data.androidPlayStoreUrl == null ? "disabled title=\"준비 중\"" : ""}>Android 앱</button>`;
     const codexSection = `
     <section class="section">
       <h2>🤖 Codex CLI</h2>
@@ -114,6 +116,9 @@ function getConnectionsViewHtml(data) {
     <section class="section">
       <h2>🛠️ 빠른 작업</h2>
       <div class="actions">
+        <button type="button" data-action="openProjectSite">Codex Remote 사이트 열기</button>
+        ${iosAppStoreButton}
+        ${androidAppStoreButton}
         <button type="button" data-action="openGuide">가이드 열기</button>
         <button type="button" data-action="showOutput">출력 보기</button>
         <button type="button" data-action="refreshCodexStatus">Codex 상태 다시 확인</button>
@@ -199,6 +204,11 @@ function getRelayServerUrl() {
         .get("relayServerUrl");
     return configured?.trim() || config_1.CONFIG.RELAY_SERVER_URL;
 }
+function getStoreUrlSetting(key) {
+    const configured = vscode.workspace.getConfiguration("codexRemote").get(key);
+    const trimmed = configured?.trim();
+    return trimmed ? trimmed : null;
+}
 function getCurrentCodexCliStatus() {
     return (commandHandler?.getCodexCliStatus() ?? {
         state: "unknown",
@@ -232,6 +242,8 @@ function updateConnectionsView() {
         localClientIds,
         codexCliStatus: getCurrentCodexCliStatus(),
         extensionVersion: extensionDisplayVersion,
+        iosAppStoreUrl: getStoreUrlSetting("iosAppStoreUrl"),
+        androidPlayStoreUrl: getStoreUrlSetting("androidPlayStoreUrl"),
     });
 }
 async function activate(context) {
@@ -548,6 +560,8 @@ async function activate(context) {
             localClientIds,
             codexCliStatus: getCurrentCodexCliStatus(),
             extensionVersion: extensionDisplayVersion,
+            iosAppStoreUrl: getStoreUrlSetting("iosAppStoreUrl"),
+            androidPlayStoreUrl: getStoreUrlSetting("androidPlayStoreUrl"),
         });
         const panel = vscode.window.createWebviewPanel("codexRemote.connections", "Codex Remote - 연결 정보", vscode.ViewColumn.One, { enableScripts: true });
         panel.webview.html = html;
@@ -566,6 +580,27 @@ async function activate(context) {
                 case "refreshCodexStatus":
                     await vscode.commands.executeCommand("codexRemote.refreshCodexStatus");
                     break;
+                case "openProjectSite":
+                    await vscode.env.openExternal(vscode.Uri.parse("https://codex-remote.jaloveeye.com/"));
+                    break;
+                case "openIosAppStore": {
+                    const storeUrl = getStoreUrlSetting("iosAppStoreUrl");
+                    if (storeUrl == null) {
+                        vscode.window.showInformationMessage("iOS 앱스토어 링크가 아직 등록되지 않았습니다.");
+                        break;
+                    }
+                    await vscode.env.openExternal(vscode.Uri.parse(storeUrl));
+                    break;
+                }
+                case "openAndroidPlayStore": {
+                    const storeUrl = getStoreUrlSetting("androidPlayStoreUrl");
+                    if (storeUrl == null) {
+                        vscode.window.showInformationMessage("Android 앱스토어 링크가 아직 등록되지 않았습니다.");
+                        break;
+                    }
+                    await vscode.env.openExternal(vscode.Uri.parse(storeUrl));
+                    break;
+                }
                 case "disconnectRelay":
                     await vscode.commands.executeCommand("codexRemote.disconnectRelay");
                     break;
