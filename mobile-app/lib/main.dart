@@ -7169,6 +7169,27 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                         : AppI18n.t(context, AppTextKey.connectAction)),
                   ),
                 ),
+                if (!_isDemoMode) ...[
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => SettingsPage(
+                              isDemoMode: _isDemoMode,
+                              onExitDemoMode: widget.onExitDemoMode,
+                              onEnterDemoMode: widget.onEnterDemoMode,
+                            ),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.settings_outlined),
+                      label: Text(AppI18n.t(context, AppTextKey.quickOpenSettings)),
+                    ),
+                  ),
+                ],
                 if (_isConnectionActionInProgress) ...[
                   const SizedBox(height: 10),
                   Row(
