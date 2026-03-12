@@ -16,6 +16,9 @@ import 'services/app_settings.dart';
 import 'services/app_i18n.dart';
 import 'services/trace_api_service.dart';
 import 'services/streaming_text_merge.dart';
+import 'services/polling_profile.dart';
+import 'services/response_indicator.dart';
+import 'services/codex_request_history.dart';
 import 'services/trace_timeline_ui.dart';
 import 'screens/settings_page.dart';
 import 'widgets/approvals_tab_view.dart';
@@ -846,6 +849,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Timer? _capabilitiesStageTimer;
   Timer? _capabilitiesFollowupTimer;
   bool _isRelayPollInFlight = false;
+  int _lastRelayPollStartedAtMs = 0;
+  static const Duration _pollSchedulerTick = Duration(milliseconds: 250);
 
   // 스트리밍 관련
   int? _streamingMessageIndex; // 현재 스트리밍 중인 메시지의 인덱스
@@ -858,6 +863,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   List<String> _availableSessions = []; // 사용 가능한 세션 목록
   List<Map<String, dynamic>> _pendingCommandApprovals = [];
   List<Map<String, dynamic>> _pendingCodexServerRequests = [];
+  List<Map<String, dynamic>> _codexRequestHistory = [];
   List<Map<String, dynamic>> _recentCommandEvents = [];
   final Map<String, Map<String, dynamic>> _resolvedApprovalEventFallbacks = {};
   final Set<String> _seenCommandApprovalIds = <String>{};
@@ -1231,6 +1237,53 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Trace report copied')),
+    );
+  }
+
+  bool get _isStreamingResponseActive =>
+      _isWaitingForResponse && _streamingMessageIndex != null;
+
+  bool get _isApprovalPendingForPrompt =>
+      !_isWaitingForResponse &&
+      (_pendingCommandApprovals.isNotEmpty ||
+          _pendingCodexServerRequests.isNotEmpty);
+
+  ResponseIndicatorState get _responseIndicatorState =>
+      resolveResponseIndicatorState(
+        waitingForResponse: _isWaitingForResponse,
+        streamingResponse: _isStreamingResponseActive,
+        approvalPending: _isApprovalPendingForPrompt,
+      );
+
+  int get _currentRelayPollIntervalMs => relayPollIntervalMs(
+        waitingForResponse: _isWaitingForResponse,
+        streamingResponse: _isStreamingResponseActive,
+        hasPendingRelayApprovals: _pendingCommandApprovals.isNotEmpty,
+        hasPendingCodexRequests: _pendingCodexServerRequests.isNotEmpty,
+      );
+
+  void _recordCodexRequestHistory({
+    required String requestId,
+    required String status,
+    required String title,
+    required String summary,
+    String requestKind = 'codex',
+    String resolvedBy = '-',
+    int? timestampMs,
+  }) {
+    if (requestId.trim().isEmpty) return;
+    final entry = buildCodexRequestHistoryEntry(
+      requestId: requestId,
+      status: status,
+      title: title,
+      summary: summary,
+      requestKind: requestKind,
+      resolvedBy: resolvedBy,
+      timestampMs: timestampMs,
+    );
+    _codexRequestHistory = upsertCodexRequestHistory(
+      current: _codexRequestHistory,
+      entry: entry,
     );
   }
 
@@ -2060,7 +2113,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (_isDemoMode) return;
     _stopPolling(); // 기존 타이머 정지
 
-    _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+    _pollTimer = Timer.periodic(_pollSchedulerTick, (_) async {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (now - _lastRelayPollStartedAtMs < _currentRelayPollIntervalMs) {
+        return;
+      }
+      _lastRelayPollStartedAtMs = now;
       await _pollRelayMessagesOnce();
     });
   }
@@ -2128,6 +2186,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _pollTimer?.cancel();
     _pollTimer = null;
     _isRelayPollInFlight = false;
+    _lastRelayPollStartedAtMs = 0;
   }
 
   // relay 서버에서 받은 메시지 처리
@@ -3102,6 +3161,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _reconnectAttempts = 0;
         _pendingCommandApprovals = [];
         _pendingCodexServerRequests = [];
+        _codexRequestHistory = [];
         _recentCommandEvents = [];
         _traceTimeline = null;
         _traceTimelineError = null;
@@ -4454,6 +4514,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _availableSessions = const ['demo-codex-session'];
       _pendingCodexServerRequests = [];
       _pendingCommandApprovals = [];
+      _codexRequestHistory = [];
       _recentCommandEvents = [];
       _loadingCommandApprovals = false;
       _loadingCommandEvents = false;
@@ -5521,11 +5582,37 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         'approvalId': approvalId,
         'resolvedBy': byLabel,
         'timeLabel': timeLabel,
+        'sortTs': (_parseTimestampValue(event['resolved_at']) ??
+                _parseTimestampValue(event['resolvedAt']) ??
+                _parseTimestampValue(event['timestamp']) ??
+                _parseTimestampValue(event['created_at']) ??
+                _parseTimestampValue(event['createdAt']) ??
+                DateTime.fromMillisecondsSinceEpoch(0))
+            .millisecondsSinceEpoch,
       });
-      if (entries.length >= limit) break;
     }
 
-    return entries;
+    for (final historyEntry in _codexRequestHistory) {
+      final item = toApprovalHistoryItem(historyEntry);
+      final dedupeKey =
+          '${item['approvalId']}_${item['status']}_${item['title']}';
+      if (seen.contains(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      entries.add(item);
+    }
+
+    entries.sort((a, b) {
+      final at = a['sortTs'] is int ? a['sortTs'] as int : 0;
+      final bt = b['sortTs'] is int ? b['sortTs'] as int : 0;
+      return bt.compareTo(at);
+    });
+
+    final sliced = entries.take(limit).map((entry) {
+      final next = Map<String, dynamic>.from(entry);
+      next.remove('sortTs');
+      return next;
+    }).toList();
+    return sliced;
   }
 
   String _describeDecisionPayload(Map<String, dynamic> responsePayload) {
@@ -6530,15 +6617,27 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final requestId = payload['requestId']?.toString() ?? '';
     if (requestId.isEmpty) return;
     final isNewRequest = _seenCodexRequestIds.add(requestId);
+    final summary =
+        _truncateForLog(_codexRequestSummary(payload), maxLength: 56);
+    final requestTitle = _codexRequestTitle(payload);
+    final requestKind = payload['requestKind']?.toString() ?? 'codex';
+    final timestamp =
+        _parseTimestampValue(payload['timestamp'])?.millisecondsSinceEpoch;
 
     if (!mounted) return;
     setState(() {
       _upsertPendingCodexServerRequest(payload);
+      _recordCodexRequestHistory(
+        requestId: requestId,
+        status: 'pending',
+        title: requestTitle,
+        summary: summary,
+        requestKind: requestKind,
+        timestampMs: timestamp,
+      );
       if (isNewRequest) {
-        final summary =
-            _truncateForLog(_codexRequestSummary(payload), maxLength: 56);
         _messages.add(MessageItem(
-            '📩 ${_codexRequestTitle(payload)} 요청 도착${summary.isNotEmpty ? ' · $summary' : ''}',
+            '📩 $requestTitle 요청 도착${summary.isNotEmpty ? ' · $summary' : ''}',
             type: MessageType.system));
       }
       _isWaitingForResponse = false;
@@ -6562,6 +6661,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     setState(() {
       _removePendingCodexServerRequest(requestId);
+      _recordCodexRequestHistory(
+        requestId: requestId,
+        status: status,
+        title: _codexRequestTitle(payload),
+        summary: message.isNotEmpty ? message : _codexRequestSummary(payload),
+        requestKind: payload['requestKind']?.toString() ?? 'codex',
+        timestampMs: _parseTimestampValue(payload['timestamp'])
+                ?.millisecondsSinceEpoch ??
+            DateTime.now().millisecondsSinceEpoch,
+      );
       final statusText = message.isNotEmpty ? message : status;
       _messages.add(MessageItem(
           'ℹ️ ${_codexRequestTitle(payload)} 상태: $statusText',
@@ -6660,6 +6769,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (!mounted) return;
       setState(() {
         _removePendingCodexServerRequest(requestId);
+        _recordCodexRequestHistory(
+          requestId: requestId,
+          status: 'submitted',
+          title: _codexRequestTitle(request),
+          summary: decisionLabel,
+          requestKind: request['requestKind']?.toString() ?? 'codex',
+          resolvedBy: _deviceId,
+        );
         _messages.add(MessageItem(
             '✅ ${_codexRequestTitle(request)} 응답 전송됨 → $decisionLabel',
             type: MessageType.system));
@@ -7190,7 +7307,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 ),
                 const SizedBox(width: 12),
                 Text(
-                  AppI18n.t(context, AppTextKey.messageWaiting),
+                  AppI18n.t(
+                    context,
+                    _responseIndicatorState == ResponseIndicatorState.receiving
+                        ? AppTextKey.messageReceiving
+                        : AppTextKey.messageWaiting,
+                  ),
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w500,
@@ -7993,7 +8115,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     ),
                     const SizedBox(width: 6),
                     Text(
-                      AppI18n.t(context, AppTextKey.homeTabPendingResponse),
+                      AppI18n.t(
+                        context,
+                        _responseIndicatorState ==
+                                ResponseIndicatorState.receiving
+                            ? AppTextKey.homeTabReceivingResponse
+                            : AppTextKey.homeTabPendingResponse,
+                      ),
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
@@ -9807,7 +9935,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                 : const Icon(Icons.send,
                                                     size: 18),
                                             label: Text(_isWaitingForResponse
-                                                ? '전송 중...'
+                                                ? (_responseIndicatorState ==
+                                                        ResponseIndicatorState
+                                                            .receiving
+                                                    ? '응답 받는 중...'
+                                                    : '전송 중...')
                                                 : '전송'),
                                             style: FilledButton.styleFrom(
                                               padding:

@@ -67,6 +67,7 @@ enum AppTextKey {
   homeTabSessionsSubtitle,
   homeTabSettingsSubtitle,
   homeTabPendingResponse,
+  homeTabReceivingResponse,
   openFullSettings,
   settingsTabHint,
   localServerMode,
@@ -158,6 +159,7 @@ enum AppTextKey {
   messageFilterWarn,
   messageFilterInfo,
   messageWaiting,
+  messageReceiving,
   demoModePopupTitleExit,
   demoModePopupContentExit,
   demoModeSampleIntro,
@@ -297,6 +299,7 @@ class AppI18n {
       AppTextKey.homeTabSessionsSubtitle: '연결 상태와 최근 연결 정보를 확인합니다.',
       AppTextKey.homeTabSettingsSubtitle: '앱 환경설정과 기본 동작을 정리합니다.',
       AppTextKey.homeTabPendingResponse: '응답 대기 중',
+      AppTextKey.homeTabReceivingResponse: '응답 받는 중',
       AppTextKey.openFullSettings: '전체 설정',
       AppTextKey.settingsTabHint: '설정 탭',
       AppTextKey.localServerMode: '로컬 서버 모드',
@@ -391,6 +394,7 @@ class AppI18n {
       AppTextKey.messageFilterWarn: 'Warn',
       AppTextKey.messageFilterInfo: 'Info',
       AppTextKey.messageWaiting: '응답을 기다리는 중...',
+      AppTextKey.messageReceiving: '응답 받는 중...',
       AppTextKey.chatSendTooltip: '보내기',
       AppTextKey.chatSendButton: '전송',
       AppTextKey.chatStopButton: '중지',
@@ -420,8 +424,7 @@ class AppI18n {
       AppTextKey.modelCatalogLoadFailed: '❌ 모델 목록 로딩 실패: {error}',
       AppTextKey.modelCatalogCapabilitiesCached: '🧩 캐시된 모델 기능으로 동작 중입니다.',
       AppTextKey.modelCatalogCapabilitiesLoaded: '🧩 런타임 기능을 로드했습니다.',
-      AppTextKey.modelCatalogCapabilitiesFallback:
-          '🧩 기본 모델 기능을 사용합니다.',
+      AppTextKey.modelCatalogCapabilitiesFallback: '🧩 기본 모델 기능을 사용합니다.',
       AppTextKey.modelCatalogRuntimeCapabilitiesSummary:
           '🧩 런타임 기능 로드 완료: {count}개 모델, IDE Context {ide}, Flat Mode {flat}',
       AppTextKey.modelSettingsTitle: '모델 설정',
@@ -568,6 +571,7 @@ class AppI18n {
       AppTextKey.homeTabSettingsSubtitle:
           'Configure app preferences and default behavior.',
       AppTextKey.homeTabPendingResponse: 'Response pending',
+      AppTextKey.homeTabReceivingResponse: 'Receiving response',
       AppTextKey.openFullSettings: 'Open full settings',
       AppTextKey.settingsTabHint: 'Settings tab',
       AppTextKey.localServerMode: 'Local server mode',
@@ -673,6 +677,7 @@ class AppI18n {
       AppTextKey.messageFilterWarn: 'Warn',
       AppTextKey.messageFilterInfo: 'Info',
       AppTextKey.messageWaiting: 'Waiting for response...',
+      AppTextKey.messageReceiving: 'Receiving response...',
       AppTextKey.chatSendTooltip: 'Send',
       AppTextKey.chatSendButton: 'Send',
       AppTextKey.chatStopButton: 'Stop',
@@ -707,7 +712,8 @@ class AppI18n {
       AppTextKey.modelCatalogLoadFailed: '❌ Failed to load model list: {error}',
       AppTextKey.modelCatalogCapabilitiesCached:
           '🧩 Running with cached capabilities.',
-      AppTextKey.modelCatalogCapabilitiesLoaded: '🧩 Runtime capabilities loaded.',
+      AppTextKey.modelCatalogCapabilitiesLoaded:
+          '🧩 Runtime capabilities loaded.',
       AppTextKey.modelCatalogCapabilitiesFallback:
           '🧩 Using fallback capabilities.',
       AppTextKey.modelCatalogRuntimeCapabilitiesSummary:
@@ -859,6 +865,7 @@ class AppI18n {
       AppTextKey.homeTabSettingsSubtitle:
           'Configure app preferences and default behavior.',
       AppTextKey.homeTabPendingResponse: 'Response pending',
+      AppTextKey.homeTabReceivingResponse: 'Receiving response',
       AppTextKey.openFullSettings: 'Open full settings',
       AppTextKey.settingsTabHint: 'Settings tab',
       AppTextKey.localServerMode: 'Local server mode',
@@ -947,7 +954,8 @@ class AppI18n {
       AppTextKey.chatPromptInputHint: 'Type your message',
       AppTextKey.chatPromptInputHintGenerating: 'Generating response...',
       AppTextKey.chatPromptInputLabel: 'Prompt input',
-      AppTextKey.chatPromptInputHintDetailed: 'Enter what you want to ask Codex...',
+      AppTextKey.chatPromptInputHintDetailed:
+          'Enter what you want to ask Codex...',
       AppTextKey.chatCopyLabel: 'Message copied to clipboard',
       AppTextKey.chatStopLabel: 'Stop',
       AppTextKey.chatNewConversationLabel: 'New conversation',
@@ -963,6 +971,7 @@ class AppI18n {
       AppTextKey.messageFilterWarn: 'Warn',
       AppTextKey.messageFilterInfo: 'Info',
       AppTextKey.messageWaiting: 'Waiting for response...',
+      AppTextKey.messageReceiving: 'Receiving response...',
       AppTextKey.chatSendTooltip: 'Send',
       AppTextKey.chatSendButton: 'Send',
       AppTextKey.chatStopButton: 'Stop',
@@ -1007,7 +1016,8 @@ class AppI18n {
       AppTextKey.modelCatalogLoadFailed: '❌ Failed to load model list: {error}',
       AppTextKey.modelCatalogCapabilitiesCached:
           '🧩 Running with cached capabilities.',
-      AppTextKey.modelCatalogCapabilitiesLoaded: '🧩 Runtime capabilities loaded.',
+      AppTextKey.modelCatalogCapabilitiesLoaded:
+          '🧩 Runtime capabilities loaded.',
       AppTextKey.modelCatalogCapabilitiesFallback:
           '🧩 Using fallback capabilities.',
       AppTextKey.modelCatalogRuntimeCapabilitiesSummary:

@@ -47,8 +47,13 @@ export class RelayClient {
   private lastSessionDiscoveryTime: number = 0;
   private lastPollHeartbeatTime: number = 0;
   private lastNoSessionHeartbeatTime: number = 0; // 세션 없을 때 폴링 동작 확인용
+  private lastPollAt: number = 0;
+  private lastRelayActivityAt: number = 0;
   private readonly SESSION_DISCOVERY_INTERVAL = 5000; // 5초마다 세션 탐지 (빠른 연결용)
-  private readonly POLL_INTERVAL = 2000; // 2초마다 폴링
+  private readonly POLL_IDLE_INTERVAL = 2000; // 기본 2초 폴링
+  private readonly POLL_ACTIVE_INTERVAL = 500; // 활성 상태 0.5초 폴링
+  private readonly POLL_LOOP_TICK = 250; // 내부 스케줄러 tick
+  private readonly POLL_ACTIVITY_WINDOW_MS = 15000; // 최근 활동 15초는 활성 폴링
   private readonly POLL_HEARTBEAT_INTERVAL = 30000; // 30초마다 폴링 동작 로그
   /** 연결 유지용 heartbeat (2분 무heartbeat 시 서버가 연결 끊김으로 간주) */
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
@@ -216,14 +221,24 @@ export class RelayClient {
     if (this.pollInterval) {
       clearInterval(this.pollInterval);
     }
+    this.lastPollAt = 0;
     this.pollInterval = setInterval(() => {
+      const now = Date.now();
+      const interval = this.getCurrentPollIntervalMs(now);
+      if (now - this.lastPollAt < interval) return;
+      this.lastPollAt = now;
       this.pollMessages().catch((err) => {
         this.logError("pollMessages threw", err);
       });
-    }, this.POLL_INTERVAL);
+    }, this.POLL_LOOP_TICK);
     this.log(
-      "⏱️ Poll interval started (every 2s) - 세션 탐지/메시지 수신 대기 중"
+      "⏱️ Adaptive poll interval started (idle 2s / active 0.5s)"
     );
+  }
+
+  private getCurrentPollIntervalMs(now: number = Date.now()): number {
+    const isActive = now - this.lastRelayActivityAt <= this.POLL_ACTIVITY_WINDOW_MS;
+    return isActive ? this.POLL_ACTIVE_INTERVAL : this.POLL_IDLE_INTERVAL;
   }
 
   /**
@@ -304,6 +319,7 @@ export class RelayClient {
         : [];
 
       if (messages.length > 0) {
+        this.lastRelayActivityAt = Date.now();
         this.log(`📥 Received ${messages.length} message(s) from relay`);
         this.log(
           `📋 Messages: ${JSON.stringify(
@@ -576,6 +592,7 @@ export class RelayClient {
       .catch(() => undefined)
       .then(async () => {
         try {
+          this.lastRelayActivityAt = Date.now();
           const parsed = JSON.parse(message);
           if (parsed.type === "chat_response") {
             this.log(

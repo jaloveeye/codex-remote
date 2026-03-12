@@ -344,9 +344,17 @@ class ApprovalsTabView extends StatelessWidget {
               final resolvedBy = item['resolvedBy']?.toString() ?? '-';
               final timeLabel = item['timeLabel']?.toString() ?? '-';
               final isApproved = status == 'approved';
+              final isPending = status == 'pending';
               final iconColor = isApproved
                   ? Theme.of(context).colorScheme.primary
-                  : Theme.of(context).colorScheme.error;
+                  : isPending
+                      ? Theme.of(context).colorScheme.tertiary
+                      : Theme.of(context).colorScheme.error;
+              final icon = isApproved
+                  ? Icons.check_circle_outline
+                  : isPending
+                      ? Icons.hourglass_top_rounded
+                      : Icons.block;
 
               return Card(
                 margin: const EdgeInsets.only(bottom: 10),
@@ -356,7 +364,7 @@ class ApprovalsTabView extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Icon(
-                        isApproved ? Icons.check_circle_outline : Icons.block,
+                        icon,
                         size: 20,
                         color: iconColor,
                       ),
