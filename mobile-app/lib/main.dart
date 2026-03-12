@@ -16,6 +16,7 @@ import 'services/app_settings.dart';
 import 'services/app_i18n.dart';
 import 'services/trace_api_service.dart';
 import 'services/streaming_text_merge.dart';
+import 'services/trace_timeline_ui.dart';
 import 'screens/settings_page.dart';
 import 'widgets/approvals_tab_view.dart';
 import 'widgets/chat_prompt_options_bar.dart';
@@ -1068,6 +1069,42 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return null;
   }
 
+  void _syncTraceTimelineTargetTrace(
+    String? traceId, {
+    bool autoFetch = false,
+  }) {
+    final normalized = traceId?.trim() ?? '';
+    if (normalized.isEmpty) return;
+
+    final previousText = _traceIdController.text.trim();
+    final nextRecent =
+        prependUniqueTraceId(current: _recentTraceIds, traceId: normalized);
+    final recentChanged = nextRecent.length != _recentTraceIds.length ||
+        nextRecent.asMap().entries.any(
+              (entry) => _recentTraceIds[entry.key] != entry.value,
+            );
+
+    if (previousText != normalized ||
+        recentChanged ||
+        _traceTimelineError != null) {
+      setState(() {
+        _traceIdController.text = normalized;
+        _recentTraceIds = nextRecent;
+        _traceTimelineError = null;
+      });
+    } else if (_traceIdController.text.trim() != normalized) {
+      _traceIdController.text = normalized;
+    }
+
+    final canAutoFetch = autoFetch &&
+        _isConnected &&
+        _connectionType == ConnectionType.relay &&
+        _selectedHomeTab == HomeTab.approvals;
+    if (canAutoFetch) {
+      unawaited(_loadTraceTimeline(traceId: normalized, silent: true));
+    }
+  }
+
   void _markTraceCompleted(String? traceId) {
     if (traceId == null || traceId.isEmpty) return;
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -2100,6 +2137,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final type = msg['type'] ?? msg['data']?['type'];
     final messageData = msg['data'] ?? msg;
     Map<String, dynamic>? traceUiRenderedEvent;
+    String? traceIdForTimeline;
 
     setState(() {
       _messages.add(MessageItem('Received: ${jsonEncode(msg)}',
@@ -2277,6 +2315,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ? Map<String, dynamic>.from(messageData as Map<dynamic, dynamic>)
               : null,
         );
+        final payload = messageData is Map
+            ? Map<String, dynamic>.from(messageData as Map<dynamic, dynamic>)
+            : <String, dynamic>{};
+        traceUiRenderedEvent = buildMobileUiRenderedTraceEvent(
+          traceId: completedTraceId,
+          messageData: payload,
+          messageType: type.toString(),
+        );
+        traceIdForTimeline = completedTraceId;
         setState(() {
           _markTraceCompleted(completedTraceId);
           if (_streamingMessageIndex != null &&
@@ -2371,21 +2418,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ? Map<String, dynamic>.from(messageData as Map<dynamic, dynamic>)
               : null,
         );
-        if (traceId != null) {
-          traceUiRenderedEvent = {
-            'traceId': traceId,
-            'hop': 'mobile.ui.rendered',
-            'status': 'ok',
-            'commandId': messageData['id']?.toString(),
-            'senderDeviceId': messageData['senderDeviceId']?.toString(),
-            'targetDeviceId': messageData['targetDeviceId']?.toString(),
-            'clientId': messageData['clientId']?.toString(),
-            'sourceTs': DateTime.now().millisecondsSinceEpoch,
-            'meta': {
-              'messageType': type.toString(),
-            },
-          };
-        }
+        traceUiRenderedEvent = buildMobileUiRenderedTraceEvent(
+          traceId: traceId,
+          messageData: messageData is Map
+              ? Map<String, dynamic>.from(messageData as Map<dynamic, dynamic>)
+              : <String, dynamic>{},
+          messageType: type.toString(),
+        );
+        traceIdForTimeline = traceId;
       } else if (type == 'agent_mode_selected') {
         // 자동 모드로 선택된 실제 모드 정보 (릴레이 서버 연결)
         final requestedMode = messageData['requestedMode'] ?? 'auto';
@@ -2461,6 +2501,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _recordUnhandledIncomingMessage(type.toString(), messageData, 'relay');
       }
     });
+    if (traceIdForTimeline != null && traceIdForTimeline!.isNotEmpty) {
+      _syncTraceTimelineTargetTrace(traceIdForTimeline, autoFetch: true);
+    }
     if (traceUiRenderedEvent != null) {
       unawaited(_emitTraceEventsBestEffort([traceUiRenderedEvent!]));
     }
@@ -3241,6 +3284,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
       final commandId = DateTime.now().millisecondsSinceEpoch.toString();
       final traceId = _newTraceId();
+      _syncTraceTimelineTargetTrace(traceId);
 
       final commandData = {
         'traceId': traceId,
