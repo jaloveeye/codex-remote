@@ -7,6 +7,8 @@ import {
   TTL,
   CommandEvent,
   CommandApprovalRequest,
+  TraceEvent,
+  MAX_MOBILE_DEVICE_IDS,
 } from "./types.js";
 
 // Upstash Redis 클라이언트 (lazy initialization)
@@ -192,17 +194,24 @@ export async function joinSession(
   const session = await getSession(sessionId);
   if (!session) return null;
 
+  const evictedMobileDeviceIds: string[] = [];
+
   // 세션 업데이트
   if (deviceType === "pc") {
     session.pcDeviceId = deviceId;
     session.pcLastSeenAt = Date.now();
   } else {
-    // 멀티 클라이언트 지원: 배열에 추가 (중복 방지)
+    // 멀티 클라이언트 지원: 최근 접속 순서 유지 + 상한 적용
     if (!session.mobileDeviceIds) {
       session.mobileDeviceIds = [];
     }
-    if (!session.mobileDeviceIds.includes(deviceId)) {
-      session.mobileDeviceIds.push(deviceId);
+
+    session.mobileDeviceIds = session.mobileDeviceIds.filter((id) => id !== deviceId);
+    session.mobileDeviceIds.push(deviceId);
+
+    if (session.mobileDeviceIds.length > MAX_MOBILE_DEVICE_IDS) {
+      const overflow = session.mobileDeviceIds.length - MAX_MOBILE_DEVICE_IDS;
+      evictedMobileDeviceIds.push(...session.mobileDeviceIds.splice(0, overflow));
     }
   }
 
@@ -214,6 +223,12 @@ export async function joinSession(
   await redis.set(REDIS_KEYS.deviceSession(deviceId), sessionId, {
     ex: TTL.device,
   });
+
+  // 상한 초과로 제거된 모바일 디바이스의 잔여 매핑/큐 정리
+  for (const evictedDeviceId of evictedMobileDeviceIds) {
+    await redis.del(REDIS_KEYS.deviceSession(evictedDeviceId));
+    await redis.del(REDIS_KEYS.messagesForDevice(sessionId, evictedDeviceId));
+  }
 
   return session;
 }
@@ -379,6 +394,7 @@ export async function deleteSession(sessionId: string): Promise<void> {
     REDIS_KEYS.messagesMobile2PC(sessionId),
     REDIS_KEYS.commandEvents(sessionId),
     REDIS_KEYS.sessionApprovals(sessionId),
+    REDIS_KEYS.traceIdsBySession(sessionId),
   ];
   if (Array.isArray(approvalIds)) {
     for (const approvalId of approvalIds) {
@@ -525,6 +541,71 @@ export async function resolveCommandApproval(
   );
 
   return approval;
+}
+
+const MAX_TRACE_EVENTS_PER_TRACE = 1000;
+const MAX_TRACE_IDS_PER_SESSION = 200;
+
+export async function appendTraceEvents(events: TraceEvent[]): Promise<void> {
+  if (!Array.isArray(events) || events.length === 0) return;
+
+  for (const event of events) {
+    if (!event?.trace_id) continue;
+
+    const traceEventsKey = REDIS_KEYS.traceEvents(event.trace_id);
+    await redis.lpush(traceEventsKey, JSON.stringify(event));
+    await redis.ltrim(traceEventsKey, 0, MAX_TRACE_EVENTS_PER_TRACE - 1);
+    await redis.expire(traceEventsKey, TTL.trace);
+
+    const sessionId = event.session_id;
+    if (!sessionId) continue;
+    const sessionTracesKey = REDIS_KEYS.traceIdsBySession(sessionId);
+    await redis.lpush(sessionTracesKey, event.trace_id);
+    await redis.ltrim(sessionTracesKey, 0, MAX_TRACE_IDS_PER_SESSION - 1);
+    await redis.expire(sessionTracesKey, TTL.trace);
+  }
+}
+
+export async function listTraceEventsByTraceId(
+  traceId: string,
+  limit: number = 200
+): Promise<TraceEvent[]> {
+  const cappedLimit = Math.min(Math.max(limit, 1), 2000);
+  const raw = await redis.lrange<string>(
+    REDIS_KEYS.traceEvents(traceId),
+    0,
+    cappedLimit - 1
+  );
+
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+
+  return raw
+    .map((item) => (typeof item === "string" ? JSON.parse(item) : item))
+    .filter(Boolean)
+    .reverse() as TraceEvent[];
+}
+
+export async function listRecentTraceIdsBySession(
+  sessionId: string,
+  limit: number = 20
+): Promise<string[]> {
+  const cappedLimit = Math.min(Math.max(limit, 1), 100);
+  const raw = await redis.lrange<string>(
+    REDIS_KEYS.traceIdsBySession(sessionId),
+    0,
+    MAX_TRACE_IDS_PER_SESSION - 1
+  );
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+
+  const recent: string[] = [];
+  const seen = new Set<string>();
+  for (const traceId of raw) {
+    if (!traceId || seen.has(traceId)) continue;
+    seen.add(traceId);
+    recent.push(traceId);
+    if (recent.length >= cappedLimit) break;
+  }
+  return recent;
 }
 
 export { redis };

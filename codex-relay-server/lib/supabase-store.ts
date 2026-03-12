@@ -9,8 +9,9 @@ import type {
   DeviceType,
   CommandEvent,
   CommandApprovalRequest,
+  TraceEvent,
 } from "./types.js";
-import { TTL } from "./types.js";
+import { TTL, MAX_MOBILE_DEVICE_IDS } from "./types.js";
 
 const PC_STALE_MS = 2 * 60 * 1000; // 2분
 
@@ -61,6 +62,23 @@ const nowMs = () => Date.now();
 const sessionExpiresAt = () => nowMs() + TTL.session * 1000;
 const deviceExpiresAt = () => nowMs() + TTL.device * 1000;
 const messageExpiresAt = () => Math.floor(nowMs() / 1000) + TTL.message;
+
+function mapTraceError(context: string, message: string): Error {
+  const normalized = message.toLowerCase();
+  const missingTraceTable =
+    normalized.includes("does not exist") &&
+    (normalized.includes("relay_trace_events") ||
+      normalized.includes("relay_reace_event") ||
+      normalized.includes("relay_reace_events"));
+
+  if (missingTraceTable) {
+    return new Error(
+      `${context}: trace table is missing in Supabase. Apply codex-relay-server/supabase/schema.sql and redeploy relay server.`
+    );
+  }
+
+  return new Error(`${context}: ${message}`);
+}
 
 export async function createSession(sessionId: string): Promise<Session> {
   const now = nowMs();
@@ -185,13 +203,21 @@ export async function joinSession(
 ): Promise<Session | null> {
   const session = await getSession(sessionId);
   if (!session) return null;
+
+  const evictedMobileDeviceIds: string[] = [];
+
   if (deviceType === "pc") {
     session.pcDeviceId = deviceId;
     session.pcLastSeenAt = nowMs();
   } else {
     session.mobileDeviceIds = session.mobileDeviceIds || [];
-    if (!session.mobileDeviceIds.includes(deviceId))
-      session.mobileDeviceIds.push(deviceId);
+    session.mobileDeviceIds = session.mobileDeviceIds.filter((id) => id !== deviceId);
+    session.mobileDeviceIds.push(deviceId);
+
+    if (session.mobileDeviceIds.length > MAX_MOBILE_DEVICE_IDS) {
+      const overflow = session.mobileDeviceIds.length - MAX_MOBILE_DEVICE_IDS;
+      evictedMobileDeviceIds.push(...session.mobileDeviceIds.splice(0, overflow));
+    }
   }
   session.expiresAt = sessionExpiresAt();
 
@@ -215,6 +241,17 @@ export async function joinSession(
       },
       { onConflict: "device_id" }
     );
+
+  for (const evictedDeviceId of evictedMobileDeviceIds) {
+    await getClient().from("relay_device_sessions").delete().eq("device_id", evictedDeviceId);
+    await getClient()
+      .from("relay_messages")
+      .delete()
+      .eq("session_id", sessionId)
+      .eq("direction", "pc2device")
+      .eq("device_id", evictedDeviceId);
+  }
+
   return session;
 }
 
@@ -393,6 +430,8 @@ export async function deleteSession(sessionId: string): Promise<void> {
   await client.from("relay_messages").delete().eq("session_id", sessionId);
   await client.from("relay_command_events").delete().eq("session_id", sessionId);
   await client.from("relay_command_approvals").delete().eq("session_id", sessionId);
+  await client.from("relay_trace_events").delete().eq("session_id", sessionId);
+  await client.from("relay_trace_summary").delete().eq("session_id", sessionId);
   await client.from("relay_device_sessions").delete().eq("session_id", sessionId);
   if (session.pcDeviceId) {
     await client
@@ -524,4 +563,73 @@ export async function resolveCommandApproval(
 
   if (error) throw new Error(`resolveCommandApproval: ${error.message}`);
   return approval;
+}
+
+export async function appendTraceEvents(events: TraceEvent[]): Promise<void> {
+  if (!Array.isArray(events) || events.length === 0) return;
+
+  const rows = events
+    .filter((event) => event?.trace_id && event?.session_id)
+    .map((event) => ({
+      trace_id: event.trace_id,
+      session_id: event.session_id,
+      event_id: event.event_id,
+      hop: event.hop,
+      status: event.status,
+      server_ts: event.server_ts,
+      source_ts: event.source_ts ?? null,
+      command_id: event.command_id ?? null,
+      relay_message_id: event.relay_message_id ?? null,
+      client_id: event.client_id ?? null,
+      sender_device_id: event.sender_device_id ?? null,
+      target_device_id: event.target_device_id ?? null,
+      body: event,
+    }));
+
+  if (rows.length === 0) return;
+
+  const { error } = await getClient().from("relay_trace_events").insert(rows);
+  if (error) throw mapTraceError("appendTraceEvents", error.message);
+}
+
+export async function listTraceEventsByTraceId(
+  traceId: string,
+  limit: number = 200
+): Promise<TraceEvent[]> {
+  const cappedLimit = Math.min(Math.max(limit, 1), 2000);
+  const { data, error } = await getClient()
+    .from("relay_trace_events")
+    .select("body")
+    .eq("trace_id", traceId)
+    .order("server_ts", { ascending: true })
+    .limit(cappedLimit);
+
+  if (error) throw mapTraceError("listTraceEventsByTraceId", error.message);
+  return (data || []).map((row: { body: TraceEvent }) => row.body);
+}
+
+export async function listRecentTraceIdsBySession(
+  sessionId: string,
+  limit: number = 20
+): Promise<string[]> {
+  const cappedLimit = Math.min(Math.max(limit, 1), 100);
+  const { data, error } = await getClient()
+    .from("relay_trace_events")
+    .select("trace_id")
+    .eq("session_id", sessionId)
+    .order("server_ts", { ascending: false })
+    .limit(500);
+
+  if (error) throw mapTraceError("listRecentTraceIdsBySession", error.message);
+
+  const recent: string[] = [];
+  const seen = new Set<string>();
+  for (const row of data || []) {
+    const traceId = (row as { trace_id?: string }).trace_id;
+    if (!traceId || seen.has(traceId)) continue;
+    seen.add(traceId);
+    recent.push(traceId);
+    if (recent.length >= cappedLimit) break;
+  }
+  return recent;
 }

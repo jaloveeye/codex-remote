@@ -191,6 +191,9 @@ class _SettingsPageState extends State<SettingsPage> {
     );
 
     if (confirmed != true || !mounted) return;
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
     await widget.onEnterDemoMode!();
   }
 

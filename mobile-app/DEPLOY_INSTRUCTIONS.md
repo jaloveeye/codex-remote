@@ -14,7 +14,7 @@ Build the Flutter web app locally or in GitHub Actions, then upload only the gen
 ```bash
 cd mobile-app
 flutter pub get
-flutter build web --release --base-href / --dart-define=RELAY_SERVER_URL=https://relay.example.com
+flutter build web --release --base-href / --dart-define=RELAY_SERVER_URL=https://codex-relay.jaloveeye.com
 cp vercel-build-output.json build/web/vercel.json
 cd build/web
 vercel --prod
@@ -72,7 +72,7 @@ Flutter web 앱은 로컬 또는 GitHub Actions에서 빌드한 뒤, 생성된 �
 ```bash
 cd mobile-app
 flutter pub get
-flutter build web --release --base-href / --dart-define=RELAY_SERVER_URL=https://relay.example.com
+flutter build web --release --base-href / --dart-define=RELAY_SERVER_URL=https://codex-relay.jaloveeye.com
 cp vercel-build-output.json build/web/vercel.json
 cd build/web
 vercel --prod

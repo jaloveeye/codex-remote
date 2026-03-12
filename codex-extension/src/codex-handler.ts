@@ -3,6 +3,10 @@ import * as readline from "readline";
 import * as vscode from "vscode";
 import { WebSocketServer } from "./websocket-server";
 import { CONFIG } from "./config";
+import {
+  combineExtractedParts,
+  mergeStreamingAccumulator,
+} from "./streaming_text_logic";
 
 type CodexAgentMode = "agent" | "ask" | "plan" | "debug" | "auto";
 type CodexReasoningEffort =
@@ -79,6 +83,7 @@ interface ClientTurnState {
   accumulatedText: string;
   hasChunks: boolean;
   senderDeviceId: string | null;
+  traceId: string | null;
 }
 
 interface CodexChatHistoryEntry {
@@ -456,9 +461,10 @@ export class CodexHandler {
       return String(value);
 
     if (Array.isArray(value)) {
-      return value
-        .map((item) => this.extractText(item, depth + 1, preserveWhitespace))
-        .join("");
+      const parts = value.map((item) =>
+        this.extractText(item, depth + 1, preserveWhitespace)
+      );
+      return combineExtractedParts(parts);
     }
 
     const objectValue = this.asObject(value);
@@ -502,7 +508,10 @@ export class CodexHandler {
       return String(value);
 
     if (Array.isArray(value)) {
-      return value.map((item) => this.extractCompletionText(item, depth + 1)).join("");
+      const parts = value.map((item) =>
+        this.extractCompletionText(item, depth + 1)
+      );
+      return combineExtractedParts(parts);
     }
 
     const objectValue = this.asObject(value);
@@ -587,15 +596,15 @@ export class CodexHandler {
 
     const candidates: unknown[] = [
       objectParams.delta,
-      objectParams.text,
       objectParams.chunk,
       this.getNested(objectParams, "item", "delta"),
-      this.getNested(objectParams, "item", "text"),
       this.getNested(objectParams, "agentMessage", "delta"),
-      this.getNested(objectParams, "agentMessage", "text"),
       this.getNested(objectParams, "data", "delta"),
-      this.getNested(objectParams, "data", "text"),
       this.getNested(objectParams, "msg", "delta"),
+      objectParams.text,
+      this.getNested(objectParams, "item", "text"),
+      this.getNested(objectParams, "agentMessage", "text"),
+      this.getNested(objectParams, "data", "text"),
       this.getNested(objectParams, "msg", "text"),
       this.getNested(objectParams, "msg", "message"),
     ];
@@ -764,6 +773,7 @@ export class CodexHandler {
             clientId,
             sessionId: state.threadId,
             targetDeviceId: state.senderDeviceId || undefined,
+            traceId: state.traceId || undefined,
           })
         );
       }
@@ -1549,6 +1559,7 @@ export class CodexHandler {
         clientId: clientId || undefined,
         sessionId: state?.threadId,
         targetDeviceId: state?.senderDeviceId || undefined,
+        traceId: state?.traceId || undefined,
       })
     );
   }
@@ -1563,21 +1574,28 @@ export class CodexHandler {
     const delta = this.extractDeltaText(params);
     if (!delta) return;
 
-    state.accumulatedText += delta;
+    const merged = mergeStreamingAccumulator({
+      current: state.accumulatedText,
+      incoming: delta,
+    });
+    if (merged.next === state.accumulatedText) return;
+
+    state.accumulatedText = merged.next;
     state.hasChunks = true;
     this.clientTurnStates.set(clientId, state);
 
     this.wsServer.send(
       JSON.stringify({
         type: "chat_response_chunk",
-        text: delta,
+        text: merged.emittedText || merged.next,
         fullText: state.accumulatedText,
-        isReplace: false,
+        isReplace: merged.isReplace,
         timestamp: new Date().toISOString(),
         source: "codex",
         sessionId: state.threadId,
         clientId,
         targetDeviceId: state.senderDeviceId || undefined,
+        traceId: state.traceId || undefined,
       })
     );
   }
@@ -1590,23 +1608,30 @@ export class CodexHandler {
     if (!state || !this.wsServer) return;
 
     const messageText = this.extractCompletionText(params, 0).trim();
-    if (!messageText || messageText === state.accumulatedText) return;
+    if (!messageText) return;
 
-    state.accumulatedText = messageText;
+    const merged = mergeStreamingAccumulator({
+      current: state.accumulatedText,
+      incoming: messageText,
+    });
+    if (merged.next === state.accumulatedText) return;
+
+    state.accumulatedText = merged.next;
     state.hasChunks = true;
     this.clientTurnStates.set(clientId, state);
 
     this.wsServer.send(
       JSON.stringify({
         type: "chat_response_chunk",
-        text: messageText,
-        fullText: messageText,
+        text: state.accumulatedText,
+        fullText: state.accumulatedText,
         isReplace: true,
         timestamp: new Date().toISOString(),
         source: "codex",
         sessionId: state.threadId,
         clientId,
         targetDeviceId: state.senderDeviceId || undefined,
+        traceId: state.traceId || undefined,
       })
     );
   }
@@ -1634,19 +1659,34 @@ export class CodexHandler {
     }
 
     if (completedText && completedText !== state.accumulatedText) {
-      state.accumulatedText = completedText;
-      if (state.hasChunks) {
+      const merged = mergeStreamingAccumulator({
+        current: state.accumulatedText,
+        incoming: completedText,
+      });
+      const canPromoteCompleted =
+        state.accumulatedText.length === 0 || merged.isReplace || !state.hasChunks;
+
+      if (canPromoteCompleted && merged.next !== state.accumulatedText) {
+        state.accumulatedText = merged.next;
+      } else if (!canPromoteCompleted) {
+        this.log(
+          `[CODEX] ignored non-replace turn/completed text to avoid duplication (currentLen=${state.accumulatedText.length}, completedLen=${completedText.length})`
+        );
+      }
+
+      if (state.hasChunks && canPromoteCompleted) {
         this.wsServer.send(
           JSON.stringify({
             type: "chat_response_chunk",
-            text: completedText,
-            fullText: completedText,
+            text: state.accumulatedText,
+            fullText: state.accumulatedText,
             isReplace: true,
             timestamp: new Date().toISOString(),
             source: "codex",
             sessionId: state.threadId,
             clientId,
             targetDeviceId: state.senderDeviceId || undefined,
+            traceId: state.traceId || undefined,
           })
         );
       }
@@ -1662,7 +1702,7 @@ export class CodexHandler {
       );
     }
 
-    if (finalText) {
+    if (finalText && !state.hasChunks) {
       this.wsServer.send(
         JSON.stringify({
           type: "chat_response",
@@ -1672,7 +1712,12 @@ export class CodexHandler {
           sessionId: state.threadId,
           clientId,
           targetDeviceId: state.senderDeviceId || undefined,
+          traceId: state.traceId || undefined,
         })
+      );
+    } else if (finalText && state.hasChunks) {
+      this.log(
+        `[CODEX] skip final chat_response because stream chunks were already emitted (len=${finalText.length})`
       );
     }
 
@@ -1685,6 +1730,7 @@ export class CodexHandler {
           sessionId: state.threadId,
           clientId,
           targetDeviceId: state.senderDeviceId || undefined,
+          traceId: state.traceId || undefined,
         })
       );
     }
@@ -1710,6 +1756,7 @@ export class CodexHandler {
         sessionId: state.threadId,
         clientId,
         targetDeviceId: state.senderDeviceId || undefined,
+        traceId: state.traceId || undefined,
       })
     );
     this.clearTurnState(clientId);
@@ -1745,6 +1792,7 @@ export class CodexHandler {
         sessionId: state.threadId,
         clientId,
         targetDeviceId: state.senderDeviceId || undefined,
+        traceId: state.traceId || undefined,
       })
     );
   }
@@ -2200,6 +2248,7 @@ export class CodexHandler {
     newSession: boolean = false,
     agentMode: CodexAgentMode = "auto",
     senderDeviceId?: string,
+    traceId?: string,
     model?: string,
     reasoningEffort: CodexReasoningEffort = "auto",
     useIdeContext: boolean = false,
@@ -2263,6 +2312,7 @@ export class CodexHandler {
       accumulatedText: "",
       hasChunks: false,
       senderDeviceId: senderDeviceId || null,
+      traceId: traceId || null,
     });
     this.threadToClient.set(threadId, effectiveClientId);
     this.saveUserMessage(effectiveClientId, threadId, text, selectedMode);
@@ -2319,6 +2369,7 @@ export class CodexHandler {
             sessionId: threadId,
             clientId: effectiveClientId,
             targetDeviceId: senderDeviceId || undefined,
+            traceId: traceId || undefined,
           })
         );
       }

@@ -140,7 +140,10 @@ class SessionsTabView extends StatelessWidget {
                         : Icons.cloud_outlined,
                   ),
                   title: Text(item.displayText),
-                  subtitle: Text(item.relativeTime),
+                  subtitle: Text(
+                    item.relativeTimeForLanguage(
+                        isEnglish: AppI18n.isEnglish(context)),
+                  ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => onConnectFromHistory(item),
                 );

@@ -19,6 +19,7 @@ export type AIProvider = "codex";
 
 export interface CommandMessage {
   id?: string;
+  traceId?: string;
   type: string;
   text?: string;
   terminal?: boolean | string;
@@ -61,6 +62,7 @@ export interface ChatResponseMessage {
   source?: "extension" | "codex";
   sessionId?: string;
   clientId?: string;
+  traceId?: string;
 }
 
 export interface TerminalOutputMessage {

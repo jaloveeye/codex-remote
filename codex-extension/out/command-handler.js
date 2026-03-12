@@ -173,12 +173,12 @@ class CommandHandler {
             throw new Error(`터미널 입력 실패: ${errorMsg}`);
         }
     }
-    async insertToPrompt(text, execute = false, clientId, newSession = false, agentMode = "auto", senderDeviceId, model, reasoningEffort, useIdeContext, useFlatMode) {
-        this.log(`[Codex Remote] insertToPrompt called - textLength: ${text.length}, execute: ${execute}, clientId: ${clientId || "none"}, newSession: ${newSession}, agentMode: ${agentMode}, senderDeviceId: ${senderDeviceId || "none"}, model: ${model || "auto"}, reasoningEffort: ${reasoningEffort || "auto"}, useIdeContext: ${useIdeContext ?? false}, useFlatMode: ${useFlatMode ?? false}`);
+    async insertToPrompt(text, execute = false, clientId, newSession = false, agentMode = "auto", senderDeviceId, traceId, model, reasoningEffort, useIdeContext, useFlatMode) {
+        this.log(`[Codex Remote] insertToPrompt called - textLength: ${text.length}, execute: ${execute}, clientId: ${clientId || "none"}, newSession: ${newSession}, agentMode: ${agentMode}, senderDeviceId: ${senderDeviceId || "none"}, traceId: ${traceId || "none"}, model: ${model || "auto"}, reasoningEffort: ${reasoningEffort || "auto"}, useIdeContext: ${useIdeContext ?? false}, useFlatMode: ${useFlatMode ?? false}`);
         if (!this.codexHandler) {
             throw new Error("Codex handler is not initialized.");
         }
-        await this.codexHandler.sendPrompt(text, execute, clientId, newSession, agentMode, senderDeviceId, model, reasoningEffort, useIdeContext, useFlatMode);
+        await this.codexHandler.sendPrompt(text, execute, clientId, newSession, agentMode, senderDeviceId, traceId, model, reasoningEffort, useIdeContext, useFlatMode);
     }
     async executeCommand(command, ...args) {
         return await vscode.commands.executeCommand(command, ...args);

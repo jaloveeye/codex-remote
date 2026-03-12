@@ -116,8 +116,112 @@ enum AppTextKey {
   connectionIntroDescription,
   connectionActionLocalConnecting,
   connectionActionRelayConnecting,
+  connectionActionLocalPreparing,
+  connectionActionRelayPreparing,
+  connectionActionNotCompleted,
+  connectionActionPendingPin,
+  connectionActionConnectingWithPin,
+  connectionActionPinRejected,
+  connectionActionConnect,
+  connectionActionCreateAndConnect,
+  connectionActionReconnect,
+  connectionActionInProgress,
+  connectionFailurePrefix,
+  connectionHistoryLabel,
+  connectionHistoryDelete,
+  connectionHistoryDeleteTitle,
+  connectionHistoryDeleteMessage,
+  connectionHistoryDeleteCancel,
+  connectionHistoryDeleteConfirm,
+  connectionMessageNoSearchResults,
+  connectionMessageNoMessages,
+  connectionMessageStartHint,
+  chatPromptInputHint,
+  chatPromptInputHintGenerating,
+  chatPromptInputLabel,
+  chatPromptInputHintDetailed,
+  chatSendTooltip,
+  chatSendButton,
+  chatStopButton,
+  chatCopyLabel,
+  chatStopLabel,
+  chatNewConversationLabel,
+  messageSectionTitle,
+  messageFilterAll,
+  messageFilterAnswerOnly,
+  messageSearchHint,
+  messageFilterAiResponse,
+  messageFilterUserPrompt,
+  messageFilterLogs,
+  messageFilterSystem,
+  messageFilterError,
+  messageFilterWarn,
+  messageFilterInfo,
+  messageWaiting,
+  demoModePopupTitleExit,
+  demoModePopupContentExit,
+  demoModeSampleIntro,
+  demoModeSampleSessionSummary,
+  demoModeSampleRelaySessionLine,
+  demoModeSamplePromptStart,
+  demoModeSampleAssistantStart,
+  demoModeSamplePromptReview,
+  demoModeSampleAssistantReview,
+  demoModeDemoApprovalActionSampleMessage,
+  demoModeDemoRequestActionSampleMessage,
+  demoModeNeedsMobileActionNotice,
+  demoModeDeferredApprovalNotice,
+  demoModeDisconnectActionSampleMessage,
+  demoModeResponseFallback,
+  demoModeReviewModeDescription,
+  demoModeSessionAutoConfiguredMessage,
+  demoModeApprovalGuideMessage,
+  demoModeFeatureGuideMessage,
+  modelCatalogLoadingLabelLoading,
+  modelCatalogLoadingLabelDefaultReady,
+  modelCatalogLoadingLabelSyncing,
+  modelCatalogLoadingLabelDelayed,
+  modelCatalogLoadingLabelFailed,
+  modelCatalogSyncDelayNotice,
+  modelCatalogSyncDelayNoticeWithElapsed,
+  modelCatalogDefaultModelLoaded,
+  modelCatalogSyncingModels,
+  modelCatalogAllLoaded,
+  modelCatalogAllLoadedWithElapsed,
+  modelCatalogListRefreshed,
+  modelCatalogCacheApplied,
+  modelCatalogSyncLatestLoading,
+  modelCatalogLoadFromNetwork,
+  modelCatalogLoadFailed,
+  modelCatalogCapabilitiesCached,
+  modelCatalogCapabilitiesLoaded,
+  modelCatalogCapabilitiesFallback,
+  modelCatalogRuntimeCapabilitiesSummary,
+  modelSettingsTitle,
+  modelDropdownAutoLabel,
+  modelDropdownModelLabel,
+  reasoningDropdownAutoLabel,
+  reasoningDropdownValueLabel,
+  modelCatalogSummaryLine,
+  modelCatalogIdeContextFilter,
+  modelCatalogFlatModeFilter,
+  pinDialogTitle,
+  pinDialogDescription,
+  pinDialogInputLabel,
+  pinDialogInputHint,
+  pinDialogConfirm,
+  pinDialogConfirming,
+  pinDialogErrorTitle,
+  pinDialogErrorMessage,
+  pinDialogInvalidMessage,
   forceStopReconnect,
   lastErrorLabel,
+  sessionHistoryTitle,
+  currentSessionLabel,
+  availableSessionsTitle,
+  viewSessionHistoryAction,
+  chatHistoryTitle,
+  chatHistoryNoMessages,
 }
 
 class AppI18n {
@@ -248,8 +352,140 @@ class AppI18n {
           '연결이 완료되면 Chat/Approvals/Sessions/Settings를 사용할 수 있어요.',
       AppTextKey.connectionActionLocalConnecting: '로컬 서버 연결 요청 중...',
       AppTextKey.connectionActionRelayConnecting: '릴레이 세션 연결 요청 중...',
+      AppTextKey.connectionActionLocalPreparing: '로컬 서버 연결 준비 중...',
+      AppTextKey.connectionActionRelayPreparing: '릴레이 세션 연결 준비 중...',
+      AppTextKey.connectionActionNotCompleted: '연결 요청이 완료되지 않았습니다.',
+      AppTextKey.connectionActionPendingPin: 'PIN 입력 대기 중...',
+      AppTextKey.connectionActionConnectingWithPin: 'PIN 확인 후 연결 중...',
+      AppTextKey.connectionActionPinRejected: 'PIN을 입력하지 않아 연결하지 않았습니다.',
+      AppTextKey.connectionActionConnect: '연결',
+      AppTextKey.connectionActionCreateAndConnect: '생성 & 연결',
+      AppTextKey.connectionActionReconnect: '재연결',
+      AppTextKey.connectionActionInProgress: '처리 중...',
+      AppTextKey.connectionFailurePrefix: '연결 실패:',
+      AppTextKey.connectionHistoryLabel: '최근 연결 목록',
+      AppTextKey.connectionHistoryDelete: '삭제',
+      AppTextKey.connectionHistoryDeleteTitle: '최근 연결 삭제',
+      AppTextKey.connectionHistoryDeleteMessage: '최근 연결 항목을 삭제하시겠습니까?',
+      AppTextKey.connectionHistoryDeleteCancel: '취소',
+      AppTextKey.connectionHistoryDeleteConfirm: '삭제',
+      AppTextKey.connectionMessageNoSearchResults: '검색 결과가 없습니다',
+      AppTextKey.connectionMessageNoMessages: '메시지가 없습니다',
+      AppTextKey.connectionMessageStartHint: '프롬프트를 입력하여 시작하세요',
+      AppTextKey.chatPromptInputHint: '메시지를 입력하세요',
+      AppTextKey.chatPromptInputHintGenerating: '응답 생성 중...',
+      AppTextKey.chatPromptInputLabel: '프롬프트 입력',
+      AppTextKey.chatPromptInputHintDetailed: 'Codex에게 요청할 내용을 입력하세요...',
+      AppTextKey.chatCopyLabel: '메시지가 클립보드에 복사되었습니다',
+      AppTextKey.chatStopLabel: '중지',
+      AppTextKey.chatNewConversationLabel: '새 대화',
+      AppTextKey.messageSectionTitle: '메시지',
+      AppTextKey.messageFilterAll: '전체',
+      AppTextKey.messageFilterAnswerOnly: '답변만',
+      AppTextKey.messageSearchHint: '메시지 검색',
+      AppTextKey.messageFilterAiResponse: 'AI Response',
+      AppTextKey.messageFilterUserPrompt: 'User Prompt',
+      AppTextKey.messageFilterLogs: 'Logs',
+      AppTextKey.messageFilterSystem: 'System',
+      AppTextKey.messageFilterError: 'Error',
+      AppTextKey.messageFilterWarn: 'Warn',
+      AppTextKey.messageFilterInfo: 'Info',
+      AppTextKey.messageWaiting: '응답을 기다리는 중...',
+      AppTextKey.chatSendTooltip: '보내기',
+      AppTextKey.chatSendButton: '전송',
+      AppTextKey.chatStopButton: '중지',
+      AppTextKey.modelCatalogLoadingLabelLoading: '모델 목록을 불러오는 중...',
+      AppTextKey.modelCatalogLoadingLabelDefaultReady:
+          '기본 모델 로딩 성공. 전체 모델을 준비 중...',
+      AppTextKey.modelCatalogLoadingLabelSyncing: '이후 모든 모델을 불러오고 있습니다...',
+      AppTextKey.modelCatalogLoadingLabelDelayed:
+          '전체 모델 동기화가 지연되어 기본 모델을 사용 중입니다.',
+      AppTextKey.modelCatalogLoadingLabelFailed: '모델 목록 로딩에 실패했어요. 다시 시도해 주세요.',
+      AppTextKey.modelCatalogSyncDelayNotice:
+          '⚠️ 전체 모델 로딩이 지연되어 기본 모델로 먼저 사용할게요.',
+      AppTextKey.modelCatalogSyncDelayNoticeWithElapsed:
+          '⚠️ 전체 모델 로딩이 {elapsed}초 이상 지연되어 기본 모델로 먼저 사용할게요.',
+      AppTextKey.modelCatalogDefaultModelLoaded: '✅ 기본 모델 로딩 성공: {model}',
+      AppTextKey.modelCatalogSyncingModels: '🔄 이후 모든 모델을 불러오고 있습니다...',
+      AppTextKey.modelCatalogAllLoaded:
+          '🔔 전체 모델 로딩 완료: {count}개 (기본: {model})',
+      AppTextKey.modelCatalogAllLoadedWithElapsed:
+          '🔔 전체 모델 로딩 완료: {count}개 (기본: {model}, {elapsed}ms)',
+      AppTextKey.modelCatalogListRefreshed:
+          '🔁 모델 목록 갱신: {previous}개 → {next}개',
+      AppTextKey.modelCatalogCacheApplied:
+          '📦 캐시된 모델 {count}개 적용 (약 {minutes}분 전)',
+      AppTextKey.modelCatalogSyncLatestLoading: '🔄 최신 모델 목록을 동기화하는 중...',
+      AppTextKey.modelCatalogLoadFromNetwork: '🛰️ 모델 목록을 불러오는 중...',
+      AppTextKey.modelCatalogLoadFailed: '❌ 모델 목록 로딩 실패: {error}',
+      AppTextKey.modelCatalogCapabilitiesCached: '🧩 캐시된 모델 기능으로 동작 중입니다.',
+      AppTextKey.modelCatalogCapabilitiesLoaded: '🧩 런타임 기능을 로드했습니다.',
+      AppTextKey.modelCatalogCapabilitiesFallback:
+          '🧩 기본 모델 기능을 사용합니다.',
+      AppTextKey.modelCatalogRuntimeCapabilitiesSummary:
+          '🧩 런타임 기능 로드 완료: {count}개 모델, IDE Context {ide}, Flat Mode {flat}',
+      AppTextKey.modelSettingsTitle: '모델 설정',
+      AppTextKey.modelDropdownAutoLabel: 'Model: Auto (기본값)',
+      AppTextKey.modelDropdownModelLabel: 'Model: {model}',
+      AppTextKey.reasoningDropdownAutoLabel: 'Reasoning: Auto',
+      AppTextKey.reasoningDropdownValueLabel: 'Reasoning: {reasoning}',
+      AppTextKey.modelCatalogSummaryLine:
+          'Models: {count} · Selected: {selected} · Reasoning options: {reasoning}',
+      AppTextKey.modelCatalogIdeContextFilter: 'IDE Context',
+      AppTextKey.modelCatalogFlatModeFilter: 'Flat Mode',
+      AppTextKey.demoModePopupTitleExit: '둘러보기 모드 종료',
+      AppTextKey.demoModePopupContentExit:
+          '심사용 둘러보기 모드를 종료하고 실제 연결 중심 화면으로 이동합니다.',
+      AppTextKey.demoModeSampleIntro: '🔎 심사/둘러보기 모드가 활성화되어 샘플 데이터로 진입했어요.',
+      AppTextKey.demoModeSampleSessionSummary:
+          '📡 PC 세션 없이도 Chat/Approvals/Sessions/Settings 화면을 확인할 수 있습니다.',
+      AppTextKey.demoModeSampleRelaySessionLine: '✅ 릴레이 세션: {sessionId}',
+      AppTextKey.demoModeSamplePromptStart:
+          '세션 ID 입력 없이도 심사 모드로 바로 시연할 수 있어요.\n\n'
+              '아래 입력창에서 프롬프트를 보내면 데모 응답이 표시됩니다.',
+      AppTextKey.demoModeSampleAssistantStart:
+          '요청하신 내용이 데모 챗으로 들어왔습니다. 현재는 실제 모델이 아닌 샘플 응답이므로 동작 예시를 보여드리기 위한 응답입니다.',
+      AppTextKey.demoModeSamplePromptReview: '승인 요청은 어디서 보나요?',
+      AppTextKey.demoModeSampleAssistantReview:
+          'Approvals 탭에서 Codex 요청/릴레이 승인 목록을 확인하고 반응 버튼을 눌러 응답할 수 있어요.',
+      AppTextKey.demoModeDemoApprovalActionSampleMessage:
+          '심사 모드에서는 승인 응답이 샘플 동작입니다.',
+      AppTextKey.demoModeDemoRequestActionSampleMessage:
+          '심사 모드에서는 요청 응답이 샘플 동작입니다.',
+      AppTextKey.demoModeNeedsMobileActionNotice: '모바일에서 선택해야 Codex가 계속 진행됩니다.',
+      AppTextKey.demoModeDeferredApprovalNotice: '승인 요청을 나중에 처리하도록 남겨뒀어요.',
+      AppTextKey.demoModeDisconnectActionSampleMessage:
+          '심사 모드에서는 연결 종료 버튼이 샘플 동작입니다.',
+      AppTextKey.demoModeResponseFallback:
+          '[{fallback}] 데모 모드에서는 실제 서버 전송 없이 샘플 메시지로 응답합니다.',
+      AppTextKey.demoModeReviewModeDescription:
+          '심사/둘러보기 모드는 실제 네트워크 연결 없이 화면 확인만 가능합니다. 핵심 기능(연결 상태/채팅/승인/세션 탭)을 검토하실 수 있습니다.',
+      AppTextKey.demoModeSessionAutoConfiguredMessage:
+          '현재는 리뷰 데모 모드이므로 자동으로 demo-session-id로 세션이 구성되어 있습니다. 릴레이/로컬 연결은 실제 연동이 필요할 때만 수행하세요.',
+      AppTextKey.demoModeApprovalGuideMessage:
+          'Approvals 탭에서 Pendings를 확인하고 승인/거부 동작을 처리할 수 있습니다. 현재는 샘플 데이터/샘플 흐름을 보여주는 모드입니다.',
+      AppTextKey.demoModeFeatureGuideMessage:
+          '예시 질문: "승인 요청은 어디서 보나요?" 또는 "모바일에서 무엇을 할 수 있나요?" 같은 안내를 통해 앱 흐름을 확인해 보세요.',
+      AppTextKey.pinDialogTitle: 'PIN 입력',
+      AppTextKey.pinDialogDescription:
+          '이 세션은 PC에서 PIN 보호가 설정되어 있습니다.\nPC에서 설정한 4~6자리 숫자 PIN을 입력하세요.',
+      AppTextKey.pinDialogInputLabel: 'PIN',
+      AppTextKey.pinDialogInputHint: '4~6자리 숫자',
+      AppTextKey.pinDialogConfirm: '확인',
+      AppTextKey.pinDialogConfirming: '확인 중...',
+      AppTextKey.pinDialogErrorTitle: 'PIN 오류',
+      AppTextKey.pinDialogErrorMessage:
+          'PIN이 올바르지 않습니다.\nPC(익스텐션)에서 설정한 4~6자리 PIN을 확인하세요.',
+      AppTextKey.pinDialogInvalidMessage:
+          'PIN이 올바르지 않습니다. PC에서 설정한 PIN을 확인하세요.',
       AppTextKey.forceStopReconnect: '자동 재연결 중지',
       AppTextKey.lastErrorLabel: '마지막 오류',
+      AppTextKey.sessionHistoryTitle: '세션 및 대화 히스토리',
+      AppTextKey.currentSessionLabel: '현재 세션',
+      AppTextKey.availableSessionsTitle: '사용 가능한 세션',
+      AppTextKey.viewSessionHistoryAction: '이 세션의 대화 히스토리 조회',
+      AppTextKey.chatHistoryTitle: '대화 히스토리',
+      AppTextKey.chatHistoryNoMessages: '대화 히스토리가 없습니다',
     },
   };
 
@@ -391,8 +627,158 @@ class AppI18n {
       AppTextKey.connectionActionLocalConnecting:
           'Connecting to local server...',
       AppTextKey.connectionActionRelayConnecting: 'Connecting relay session...',
+      AppTextKey.connectionActionLocalPreparing:
+          'Preparing local server connection...',
+      AppTextKey.connectionActionRelayPreparing:
+          'Preparing relay session connection...',
+      AppTextKey.connectionActionNotCompleted:
+          'Connection request was not completed.',
+      AppTextKey.connectionActionPendingPin: 'Waiting for PIN input...',
+      AppTextKey.connectionActionConnectingWithPin:
+          'Connecting after PIN check...',
+      AppTextKey.connectionActionPinRejected:
+          'Did not connect because no PIN was entered.',
+      AppTextKey.connectionActionConnect: 'Connect',
+      AppTextKey.connectionActionCreateAndConnect: 'Create & Connect',
+      AppTextKey.connectionActionReconnect: 'Reconnect',
+      AppTextKey.connectionActionInProgress: 'Processing...',
+      AppTextKey.connectionFailurePrefix: 'Connection failed:',
+      AppTextKey.connectionHistoryLabel: 'Recent connections',
+      AppTextKey.connectionHistoryDelete: 'Delete',
+      AppTextKey.connectionHistoryDeleteTitle: 'Delete recent connection',
+      AppTextKey.connectionHistoryDeleteMessage:
+          'Do you want to delete this connection entry?',
+      AppTextKey.connectionHistoryDeleteCancel: 'Cancel',
+      AppTextKey.connectionHistoryDeleteConfirm: 'Delete',
+      AppTextKey.connectionMessageNoSearchResults: 'No search results',
+      AppTextKey.connectionMessageNoMessages: 'No messages',
+      AppTextKey.connectionMessageStartHint: 'Enter a prompt to start',
+      AppTextKey.chatPromptInputHint: 'Type your message',
+      AppTextKey.chatPromptInputHintGenerating: 'Generating response...',
+      AppTextKey.chatPromptInputLabel: 'Prompt input',
+      AppTextKey.chatPromptInputHintDetailed:
+          'Enter what you want to ask Codex...',
+      AppTextKey.chatCopyLabel: 'Message copied to clipboard',
+      AppTextKey.chatStopLabel: 'Stop',
+      AppTextKey.chatNewConversationLabel: 'New conversation',
+      AppTextKey.messageSectionTitle: 'Messages',
+      AppTextKey.messageFilterAll: 'All',
+      AppTextKey.messageFilterAnswerOnly: 'AI Responses only',
+      AppTextKey.messageSearchHint: 'Search messages',
+      AppTextKey.messageFilterAiResponse: 'AI Response',
+      AppTextKey.messageFilterUserPrompt: 'User Prompt',
+      AppTextKey.messageFilterLogs: 'Logs',
+      AppTextKey.messageFilterSystem: 'System',
+      AppTextKey.messageFilterError: 'Error',
+      AppTextKey.messageFilterWarn: 'Warn',
+      AppTextKey.messageFilterInfo: 'Info',
+      AppTextKey.messageWaiting: 'Waiting for response...',
+      AppTextKey.chatSendTooltip: 'Send',
+      AppTextKey.chatSendButton: 'Send',
+      AppTextKey.chatStopButton: 'Stop',
+      AppTextKey.modelCatalogLoadingLabelLoading: 'Loading model list...',
+      AppTextKey.modelCatalogLoadingLabelDefaultReady:
+          'Default model loaded. Preparing all models...',
+      AppTextKey.modelCatalogLoadingLabelSyncing: 'Loading all models next...',
+      AppTextKey.modelCatalogLoadingLabelDelayed:
+          'Model sync is delayed, so default model is used first.',
+      AppTextKey.modelCatalogLoadingLabelFailed:
+          'Model list failed to load. Please try again.',
+      AppTextKey.modelCatalogSyncDelayNotice:
+          '⚠️ Full model loading is delayed. The default model will be used first.',
+      AppTextKey.modelCatalogSyncDelayNoticeWithElapsed:
+          '⚠️ Full model loading has been delayed by {elapsed} seconds, so default model is used first.',
+      AppTextKey.modelCatalogDefaultModelLoaded:
+          '✅ Default model loaded successfully: {model}',
+      AppTextKey.modelCatalogSyncingModels:
+          '🔄 Loading all remaining models...',
+      AppTextKey.modelCatalogAllLoaded:
+          '🔔 All models loaded: {count} (default: {model})',
+      AppTextKey.modelCatalogAllLoadedWithElapsed:
+          '🔔 All models loaded: {count} (default: {model}, {elapsed}ms)',
+      AppTextKey.modelCatalogListRefreshed:
+          '🔁 Model list updated: {previous} → {next}',
+      AppTextKey.modelCatalogCacheApplied:
+          '📦 Applied cached {count} models ({minutes} minutes ago)',
+      AppTextKey.modelCatalogSyncLatestLoading:
+          '🔄 Synchronizing latest model list...',
+      AppTextKey.modelCatalogLoadFromNetwork:
+          '🛰️ Loading model list from network...',
+      AppTextKey.modelCatalogLoadFailed: '❌ Failed to load model list: {error}',
+      AppTextKey.modelCatalogCapabilitiesCached:
+          '🧩 Running with cached capabilities.',
+      AppTextKey.modelCatalogCapabilitiesLoaded: '🧩 Runtime capabilities loaded.',
+      AppTextKey.modelCatalogCapabilitiesFallback:
+          '🧩 Using fallback capabilities.',
+      AppTextKey.modelCatalogRuntimeCapabilitiesSummary:
+          '🧩 Runtime capabilities loaded: {count} model(s), IDE context {ide}, flat mode {flat}',
+      AppTextKey.modelSettingsTitle: 'Model settings',
+      AppTextKey.modelDropdownAutoLabel: 'Model: Auto (default)',
+      AppTextKey.modelDropdownModelLabel: 'Model: {model}',
+      AppTextKey.reasoningDropdownAutoLabel: 'Reasoning: Auto',
+      AppTextKey.reasoningDropdownValueLabel: 'Reasoning: {reasoning}',
+      AppTextKey.modelCatalogSummaryLine:
+          'Models: {count} · Selected: {selected} · Reasoning options: {reasoning}',
+      AppTextKey.modelCatalogIdeContextFilter: 'IDE Context',
+      AppTextKey.modelCatalogFlatModeFilter: 'Flat Mode',
+      AppTextKey.demoModePopupTitleExit: 'Exit Demo Mode',
+      AppTextKey.demoModePopupContentExit:
+          'Exit review mode and return to the actual connection-centered screen.',
+      AppTextKey.demoModeSampleIntro:
+          '🔎 Demo mode is active and entered with sample data.',
+      AppTextKey.demoModeSampleSessionSummary:
+          '📡 You can inspect Chat/Approvals/Sessions/Settings screens without a PC session.',
+      AppTextKey.demoModeSampleRelaySessionLine: '✅ Relay session: {sessionId}',
+      AppTextKey.demoModeSamplePromptStart:
+          'You can use App Demo mode immediately without entering a session ID.\n\n'
+              'Send a prompt in the input box and you will see a sample response.',
+      AppTextKey.demoModeSampleAssistantStart:
+          'Your request has arrived as a demo chat message. Because this is demo mode, '
+              'this is a sample response showing expected behavior.',
+      AppTextKey.demoModeSamplePromptReview:
+          'Where can I check approval requests?',
+      AppTextKey.demoModeSampleAssistantReview:
+          'You can check Codex and relay-approval requests in the Approvals tab and respond with action buttons.',
+      AppTextKey.demoModeDemoApprovalActionSampleMessage:
+          'In review mode, approval responses are simulated.',
+      AppTextKey.demoModeDemoRequestActionSampleMessage:
+          'In review mode, request responses are sample actions.',
+      AppTextKey.demoModeNeedsMobileActionNotice:
+          'Codex will continue only after a decision is made from mobile.',
+      AppTextKey.demoModeDeferredApprovalNotice:
+          'Deferred this approval for later.',
+      AppTextKey.demoModeDisconnectActionSampleMessage:
+          'In review mode, disconnect is a sample action.',
+      AppTextKey.demoModeResponseFallback:
+          '[{fallback}] In demo mode, responses are sample messages and are not sent to the real server.',
+      AppTextKey.demoModeReviewModeDescription:
+          'Review/demo mode only checks UI flow without actual network connection. Core functions (connection status, chat, approvals, sessions) can be reviewed here.',
+      AppTextKey.demoModeSessionAutoConfiguredMessage:
+          'Currently in review demo mode, a session is configured automatically as demo-session-id. Perform relay/local connection only when real integration is needed.',
+      AppTextKey.demoModeApprovalGuideMessage:
+          'In the Approvals tab, you can check pending items and process allow/reject actions. This mode currently displays mock data and mock flow.',
+      AppTextKey.demoModeFeatureGuideMessage:
+          'Check app flow with sample prompts such as “Where can I see approval requests?” or “What can I do on mobile?”',
+      AppTextKey.pinDialogTitle: 'Enter PIN',
+      AppTextKey.pinDialogDescription:
+          'This session is protected by a PIN set on PC.\nPlease enter 4~6 digit PIN configured on the PC.',
+      AppTextKey.pinDialogInputLabel: 'PIN',
+      AppTextKey.pinDialogInputHint: '4~6 digits',
+      AppTextKey.pinDialogConfirm: 'Confirm',
+      AppTextKey.pinDialogConfirming: 'Confirming...',
+      AppTextKey.pinDialogErrorTitle: 'PIN Error',
+      AppTextKey.pinDialogErrorMessage:
+          'PIN is invalid.\nPlease check the 4~6 digit PIN set in the PC extension.',
+      AppTextKey.pinDialogInvalidMessage:
+          'PIN is invalid. Please verify the PIN configured on PC.',
       AppTextKey.forceStopReconnect: 'Stop auto reconnect',
       AppTextKey.lastErrorLabel: 'Last error',
+      AppTextKey.sessionHistoryTitle: 'Session and chat history',
+      AppTextKey.currentSessionLabel: 'Current Session',
+      AppTextKey.availableSessionsTitle: 'Available sessions',
+      AppTextKey.viewSessionHistoryAction: 'View this session history',
+      AppTextKey.chatHistoryTitle: 'Conversation history',
+      AppTextKey.chatHistoryNoMessages: 'No conversation history',
     },
     AppLanguageSetting.korean: {},
     AppLanguageSetting.system: {
@@ -532,8 +918,148 @@ class AppI18n {
       AppTextKey.connectionActionLocalConnecting:
           'Connecting to local server...',
       AppTextKey.connectionActionRelayConnecting: 'Connecting relay session...',
+      AppTextKey.connectionActionLocalPreparing:
+          'Preparing local server connection...',
+      AppTextKey.connectionActionRelayPreparing:
+          'Preparing relay session connection...',
+      AppTextKey.connectionActionNotCompleted:
+          'Connection request was not completed.',
+      AppTextKey.connectionActionPendingPin: 'Waiting for PIN input...',
+      AppTextKey.connectionActionConnectingWithPin:
+          'Connecting after PIN check...',
+      AppTextKey.connectionActionPinRejected:
+          'Did not connect because no PIN was entered.',
+      AppTextKey.connectionActionConnect: 'Connect',
+      AppTextKey.connectionActionCreateAndConnect: 'Create & Connect',
+      AppTextKey.connectionActionReconnect: 'Reconnect',
+      AppTextKey.connectionActionInProgress: 'Processing...',
+      AppTextKey.connectionFailurePrefix: 'Connection failed:',
+      AppTextKey.connectionHistoryLabel: 'Recent connections',
+      AppTextKey.connectionHistoryDelete: 'Delete',
+      AppTextKey.connectionHistoryDeleteTitle: 'Delete recent connection',
+      AppTextKey.connectionHistoryDeleteMessage:
+          'Do you want to delete this connection entry?',
+      AppTextKey.connectionHistoryDeleteCancel: 'Cancel',
+      AppTextKey.connectionHistoryDeleteConfirm: 'Delete',
+      AppTextKey.connectionMessageNoSearchResults: 'No search results',
+      AppTextKey.connectionMessageNoMessages: 'No messages',
+      AppTextKey.connectionMessageStartHint: 'Enter a prompt to start',
+      AppTextKey.chatPromptInputHint: 'Type your message',
+      AppTextKey.chatPromptInputHintGenerating: 'Generating response...',
+      AppTextKey.chatPromptInputLabel: 'Prompt input',
+      AppTextKey.chatPromptInputHintDetailed: 'Enter what you want to ask Codex...',
+      AppTextKey.chatCopyLabel: 'Message copied to clipboard',
+      AppTextKey.chatStopLabel: 'Stop',
+      AppTextKey.chatNewConversationLabel: 'New conversation',
+      AppTextKey.messageSectionTitle: 'Messages',
+      AppTextKey.messageFilterAll: 'All',
+      AppTextKey.messageFilterAnswerOnly: 'AI Responses only',
+      AppTextKey.messageSearchHint: 'Search messages',
+      AppTextKey.messageFilterAiResponse: 'AI Response',
+      AppTextKey.messageFilterUserPrompt: 'User Prompt',
+      AppTextKey.messageFilterLogs: 'Logs',
+      AppTextKey.messageFilterSystem: 'System',
+      AppTextKey.messageFilterError: 'Error',
+      AppTextKey.messageFilterWarn: 'Warn',
+      AppTextKey.messageFilterInfo: 'Info',
+      AppTextKey.messageWaiting: 'Waiting for response...',
+      AppTextKey.chatSendTooltip: 'Send',
+      AppTextKey.chatSendButton: 'Send',
+      AppTextKey.chatStopButton: 'Stop',
+      AppTextKey.demoModeResponseFallback:
+          '[{fallback}] In demo mode, responses are sample messages and are not sent to the real server.',
+      AppTextKey.demoModeReviewModeDescription:
+          'Review/demo mode only checks UI flow without actual network connection. Core functions (connection status, chat, approvals, sessions) can be reviewed here.',
+      AppTextKey.demoModeSessionAutoConfiguredMessage:
+          'Currently in review demo mode, a session is configured automatically as demo-session-id. Perform relay/local connection only when real integration is needed.',
+      AppTextKey.demoModeApprovalGuideMessage:
+          'In the Approvals tab, you can check pending items and process allow/reject actions. This mode currently displays mock data and mock flow.',
+      AppTextKey.demoModeFeatureGuideMessage:
+          'Check app flow with sample prompts such as “Where can I see approval requests?” or “What can I do on mobile?”',
+      AppTextKey.modelCatalogLoadingLabelLoading: 'Loading model list...',
+      AppTextKey.modelCatalogLoadingLabelDefaultReady:
+          'Default model loaded. Preparing all models...',
+      AppTextKey.modelCatalogLoadingLabelSyncing: 'Loading all models next...',
+      AppTextKey.modelCatalogLoadingLabelDelayed:
+          'Model sync is delayed, so default model is used first.',
+      AppTextKey.modelCatalogLoadingLabelFailed:
+          'Model list failed to load. Please try again.',
+      AppTextKey.modelCatalogSyncDelayNotice:
+          '⚠️ Full model loading is delayed. The default model will be used first.',
+      AppTextKey.modelCatalogSyncDelayNoticeWithElapsed:
+          '⚠️ Full model loading has been delayed by {elapsed} seconds, so default model is used first.',
+      AppTextKey.modelCatalogDefaultModelLoaded:
+          '✅ Default model loaded successfully: {model}',
+      AppTextKey.modelCatalogSyncingModels:
+          '🔄 Loading all remaining models...',
+      AppTextKey.modelCatalogAllLoaded:
+          '🔔 All models loaded: {count} (default: {model})',
+      AppTextKey.modelCatalogAllLoadedWithElapsed:
+          '🔔 All models loaded: {count} (default: {model}, {elapsed}ms)',
+      AppTextKey.modelCatalogListRefreshed:
+          '🔁 Model list updated: {previous} → {next}',
+      AppTextKey.modelCatalogCacheApplied:
+          '📦 Applied cached {count} models ({minutes} minutes ago)',
+      AppTextKey.modelCatalogSyncLatestLoading:
+          '🔄 Synchronizing latest model list...',
+      AppTextKey.modelCatalogLoadFromNetwork:
+          '🛰️ Loading model list from network...',
+      AppTextKey.modelCatalogLoadFailed: '❌ Failed to load model list: {error}',
+      AppTextKey.modelCatalogCapabilitiesCached:
+          '🧩 Running with cached capabilities.',
+      AppTextKey.modelCatalogCapabilitiesLoaded: '🧩 Runtime capabilities loaded.',
+      AppTextKey.modelCatalogCapabilitiesFallback:
+          '🧩 Using fallback capabilities.',
+      AppTextKey.modelCatalogRuntimeCapabilitiesSummary:
+          '🧩 Runtime capabilities loaded: {count} model(s), IDE context {ide}, flat mode {flat}',
+      AppTextKey.demoModePopupTitleExit: 'Exit Demo Mode',
+      AppTextKey.demoModePopupContentExit:
+          'Exit review mode and return to the actual connection-centered screen.',
+      AppTextKey.demoModeSampleIntro:
+          '🔎 Demo mode is active and entered with sample data.',
+      AppTextKey.demoModeSampleSessionSummary:
+          '📡 You can inspect Chat/Approvals/Sessions/Settings screens without a PC session.',
+      AppTextKey.demoModeSampleRelaySessionLine: '✅ Relay session: {sessionId}',
+      AppTextKey.demoModeSamplePromptStart:
+          'You can use App Demo mode immediately without entering a session ID.\n\n'
+              'Send a prompt in the input box and you will see a sample response.',
+      AppTextKey.demoModeSampleAssistantStart:
+          'Your request has arrived as a demo chat message. Because this is demo mode, '
+              'this is a sample response showing expected behavior.',
+      AppTextKey.demoModeSamplePromptReview:
+          'Where can I check approval requests?',
+      AppTextKey.demoModeSampleAssistantReview:
+          'You can check Codex and relay-approval requests in the Approvals tab and respond with action buttons.',
+      AppTextKey.demoModeDemoApprovalActionSampleMessage:
+          'In review mode, approval responses are simulated.',
+      AppTextKey.demoModeDemoRequestActionSampleMessage:
+          'In review mode, request responses are sample actions.',
+      AppTextKey.demoModeNeedsMobileActionNotice:
+          'Codex will continue only after a decision is made from mobile.',
+      AppTextKey.demoModeDeferredApprovalNotice:
+          'Deferred this approval for later.',
+      AppTextKey.demoModeDisconnectActionSampleMessage:
+          'In review mode, disconnect is a sample action.',
+      AppTextKey.pinDialogTitle: 'Enter PIN',
+      AppTextKey.pinDialogDescription:
+          'This session is protected by a PIN set on PC.\nPlease enter 4~6 digit PIN configured on the PC.',
+      AppTextKey.pinDialogInputLabel: 'PIN',
+      AppTextKey.pinDialogInputHint: '4~6 digits',
+      AppTextKey.pinDialogConfirm: 'Confirm',
+      AppTextKey.pinDialogConfirming: 'Confirming...',
+      AppTextKey.pinDialogErrorTitle: 'PIN Error',
+      AppTextKey.pinDialogErrorMessage:
+          'PIN is invalid.\nPlease check the 4~6 digit PIN set in the PC extension.',
+      AppTextKey.pinDialogInvalidMessage:
+          'PIN is invalid. Please verify the PIN configured on PC.',
       AppTextKey.forceStopReconnect: 'Stop auto reconnect',
       AppTextKey.lastErrorLabel: 'Last error',
+      AppTextKey.sessionHistoryTitle: 'Session and chat history',
+      AppTextKey.currentSessionLabel: 'Current Session',
+      AppTextKey.availableSessionsTitle: 'Available sessions',
+      AppTextKey.viewSessionHistoryAction: 'View this session history',
+      AppTextKey.chatHistoryTitle: 'Conversation history',
+      AppTextKey.chatHistoryNoMessages: 'No conversation history',
     },
   };
 
@@ -569,5 +1095,22 @@ class AppI18n {
       return _ko[AppLanguageSetting.korean]![key] ?? key.name;
     }
     return _en[AppLanguageSetting.english]![key] ?? key.name;
+  }
+
+  static String tWithParams(
+    BuildContext context,
+    AppTextKey key,
+    Map<String, String> params,
+  ) {
+    var text = t(context, key);
+    params.forEach((placeholder, value) {
+      text = text.replaceAll('{$placeholder}', value);
+    });
+    return text;
+  }
+
+  static bool isEnglish(BuildContext context) {
+    final setting = AppSettings().appLanguage;
+    return _resolveLanguage(setting, context) == AppLanguageSetting.english;
   }
 }

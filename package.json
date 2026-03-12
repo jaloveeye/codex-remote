@@ -1,6 +1,6 @@
 {
   "name": "codex-remote",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "description": "Control Codex from your mobile device",
   "author": {
     "name": "김형진",
@@ -12,7 +12,9 @@
   ],
   "scripts": {
     "build:extension": "cd codex-extension && npm run compile",
-    "dev:extension": "cd codex-extension && npm run watch"
+    "dev:extension": "cd codex-extension && npm run watch",
+    "test:relay:live": "node test-relay-live-roundtrip.js",
+    "test:relay:trace:smoke": "node test-relay-trace-smoke.js"
   },
   "keywords": [
     "codex",

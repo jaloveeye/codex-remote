@@ -190,6 +190,7 @@ export class CommandHandler {
     newSession: boolean = false,
     agentMode: "agent" | "ask" | "plan" | "debug" | "auto" = "auto",
     senderDeviceId?: string,
+    traceId?: string,
     model?: string,
     reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh",
     useIdeContext?: boolean,
@@ -200,6 +201,7 @@ export class CommandHandler {
         clientId || "none"
       }, newSession: ${newSession}, agentMode: ${agentMode}, senderDeviceId: ${
         senderDeviceId || "none"
+      }, traceId: ${traceId || "none"
       }, model: ${model || "auto"}, reasoningEffort: ${
         reasoningEffort || "auto"
       }, useIdeContext: ${useIdeContext ?? false}, useFlatMode: ${
@@ -218,6 +220,7 @@ export class CommandHandler {
       newSession,
       agentMode,
       senderDeviceId,
+      traceId,
       model,
       reasoningEffort,
       useIdeContext,

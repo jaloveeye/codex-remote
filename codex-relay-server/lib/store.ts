@@ -70,3 +70,12 @@ export const listCommandApprovals = useSupabase
 export const resolveCommandApproval = useSupabase
   ? supabaseStore.resolveCommandApproval
   : redisStore.resolveCommandApproval;
+export const appendTraceEvents = useSupabase
+  ? supabaseStore.appendTraceEvents
+  : redisStore.appendTraceEvents;
+export const listTraceEventsByTraceId = useSupabase
+  ? supabaseStore.listTraceEventsByTraceId
+  : redisStore.listTraceEventsByTraceId;
+export const listRecentTraceIdsBySession = useSupabase
+  ? supabaseStore.listRecentTraceIdsBySession
+  : redisStore.listRecentTraceIdsBySession;

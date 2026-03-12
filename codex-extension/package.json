@@ -64,6 +64,10 @@
         "title": "%command.disconnectRelay%"
       },
       {
+        "command": "codexRemote.clearRelaySession",
+        "title": "%command.clearRelaySession%"
+      },
+      {
         "command": "codexRemote.connectToRelaySessionById",
         "title": "%command.connectSessionById%"
       },
@@ -78,7 +82,7 @@
         "codexRemote.relayServerUrl": {
           "type": "string",
           "scope": "application",
-          "default": "https://relay.example.com",
+          "default": "https://codex-relay.jaloveeye.com",
           "description": "%config.relayServerUrl.description%"
         },
         "codexRemote.iosAppStoreUrl": {

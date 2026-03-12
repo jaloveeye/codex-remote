@@ -7,6 +7,7 @@ import * as vscode from "vscode";
 import * as https from "https";
 import * as http from "http";
 import { URL } from "url";
+import { TraceEmitter, type TraceHopInput } from "./trace_emitter";
 
 export interface RelayMessage {
   type: string;
@@ -54,11 +55,17 @@ export class RelayClient {
   private readonly HEARTBEAT_INTERVAL_MS = 30 * 1000; // 30초마다 heartbeat
   /** 릴레이로 보내는 메시지 순서 보장용 직렬화 큐 */
   private sendQueue: Promise<void> = Promise.resolve();
+  private traceEmitter: TraceEmitter;
 
   constructor(relayServerUrl: string, outputChannel: vscode.OutputChannel) {
     this.relayServerUrl = relayServerUrl;
     this.deviceId = `pc-${Date.now()}`;
     this.outputChannel = outputChannel;
+    this.traceEmitter = new TraceEmitter(async (events) => {
+      await this.httpRequest(`${this.relayServerUrl}/api/trace-events/batch`, "POST", {
+        events,
+      });
+    });
   }
 
   private log(message: string, level: "info" | "warn" | "error" = "info") {
@@ -76,6 +83,16 @@ export class RelayClient {
     }`;
     this.outputChannel.appendLine(logMessage);
     console.error(logMessage, error);
+  }
+
+  recordTraceHop(input: TraceHopInput): void {
+    if (!this.sessionId) return;
+    const accepted = this.traceEmitter.emitTraceHop({
+      ...input,
+      sessionId: input.sessionId || this.sessionId,
+    });
+    if (!accepted) return;
+    this.traceEmitter.flushNow().catch(() => undefined);
   }
 
   /**
@@ -327,6 +344,41 @@ export class RelayClient {
               : basePayload;
           const messageStr =
             typeof payload === "string" ? payload : JSON.stringify(payload);
+
+          const payloadObj =
+            payload && typeof payload === "object" && !Array.isArray(payload)
+              ? (payload as Record<string, unknown>)
+              : null;
+          const traceId =
+            (payloadObj && typeof payloadObj.traceId === "string" && payloadObj.traceId.trim()) ||
+            (payloadObj && typeof payloadObj.id === "string" && payloadObj.id.trim()) ||
+            null;
+          const commandId =
+            (payloadObj && typeof payloadObj.id === "string" && payloadObj.id.trim()) || null;
+
+          this.recordTraceHop({
+            traceId,
+            sessionId: this.sessionId,
+            hop: "ext.poll.recv",
+            commandId,
+            relayMessageId:
+              typeof msg.id === "string" ? msg.id : undefined,
+            senderDeviceId:
+              typeof msg.senderDeviceId === "string"
+                ? msg.senderDeviceId
+                : undefined,
+            targetDeviceId:
+              typeof msg.targetDeviceId === "string"
+                ? msg.targetDeviceId
+                : undefined,
+            meta: {
+              messageType:
+                payloadObj && typeof payloadObj.type === "string"
+                  ? payloadObj.type
+                  : msg.type,
+            },
+          });
+
           this.log(
             `📤 Calling onMessageCallback with: ${messageStr.substring(0, 200)}`
           );
@@ -544,6 +596,28 @@ export class RelayClient {
             }
           );
 
+          const traceId =
+            (typeof parsed.traceId === "string" && parsed.traceId.trim()) ||
+            (typeof parsed.id === "string" && parsed.id.trim()) ||
+            null;
+          const commandId =
+            (typeof parsed.id === "string" && parsed.id.trim()) || null;
+          this.recordTraceHop({
+            traceId,
+            sessionId,
+            hop: "ext.send.to_relay",
+            commandId,
+            senderDeviceId: this.deviceId,
+            targetDeviceId:
+              typeof parsed.targetDeviceId === "string"
+                ? parsed.targetDeviceId
+                : undefined,
+            meta: {
+              messageType:
+                typeof parsed.type === "string" ? parsed.type : "message",
+            },
+          });
+
           if (!data) {
             this.logError("Relay /api/send returned no data");
             return;
@@ -573,6 +647,72 @@ export class RelayClient {
    */
   isConnectedToSession(): boolean {
     return this.isConnected && this.sessionId !== null;
+  }
+
+  /**
+   * 현재 연결된 릴레이 세션을 서버에서 정리한다.
+   * keepPc=true(기본): 같은 세션 ID를 재생성하고 현재 PC 연결은 유지
+   */
+  async clearCurrentSession(
+    keepPc: boolean = true
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!this.sessionId || !this.isConnected) {
+      return { success: false, error: "No connected relay session" };
+    }
+
+    const currentSessionId = this.sessionId;
+
+    try {
+      const result = await this.httpRequestWithStatus(
+        `${this.relayServerUrl}/api/session-clear`,
+        "POST",
+        {
+          sessionId: currentSessionId,
+          deviceId: this.deviceId,
+          keepPc,
+        }
+      );
+
+      if (
+        result.statusCode >= 200 &&
+        result.statusCode < 300 &&
+        result.body?.success
+      ) {
+        const clearedCount =
+          result.body?.data?.cleared?.mobileDeviceCount ?? "?";
+
+        if (keepPc) {
+          this.sessionId = currentSessionId;
+          this.isConnected = true;
+          this.pcInUse = false;
+          this.startHeartbeat();
+          this.log(
+            `🧹 세션 ${currentSessionId} 정리 완료 (모바일 ${clearedCount}개 정리, PC 연결 유지)`
+          );
+        } else {
+          this.clearHeartbeat();
+          this.sessionId = null;
+          this.isConnected = false;
+          this.log(
+            `🧹 세션 ${currentSessionId} 정리 완료 (모바일 ${clearedCount}개 정리, 연결 종료)`
+          );
+        }
+
+        return { success: true };
+      }
+
+      const errMsg =
+        (result.body as any)?.error ??
+        (typeof result.body === "object" && result.body !== null
+          ? JSON.stringify(result.body)
+          : `HTTP ${result.statusCode}`);
+      this.logError("Failed to clear relay session", errMsg);
+      return { success: false, error: String(errMsg) };
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      this.logError("Failed to clear relay session", errMsg);
+      return { success: false, error: errMsg };
+    }
   }
 
   /**
