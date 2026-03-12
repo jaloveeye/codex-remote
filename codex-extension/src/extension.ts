@@ -131,7 +131,10 @@ function getConnectionsViewHtml(data: {
         <button type="button" data-action="refreshCodexStatus">Codex 상태 다시 확인</button>
         <button type="button" data-action="disconnectRelay" ${
           relaySessionId == null ? "disabled" : ""
-        }>릴레이 연결 끊기</button>
+        }>세션 종료</button>
+        <button type="button" data-action="clearRelaySession" ${
+          relaySessionId == null ? "disabled" : ""
+        }>세션 클리어</button>
       </div>
       <p class="relay-meta">문제가 있으면 가이드를 열거나 출력 로그를 확인해 주세요.</p>
     </section>`;
@@ -359,6 +362,32 @@ export async function activate(context: vscode.ExtensionContext) {
       );
 
       // Handle command locally (whether from local WebSocket or relay)
+      if (
+        source === "relay" &&
+        relayClient &&
+        command.type === "insert_text" &&
+        (command.prompt === true || command.prompt === "true")
+      ) {
+        const traceId =
+          (typeof command.traceId === "string" && command.traceId.trim()) ||
+          (typeof command.id === "string" && command.id.trim()) ||
+          null;
+        const commandId =
+          (typeof command.id === "string" && command.id.trim()) || null;
+        relayClient.recordTraceHop({
+          traceId,
+          hop: "ext.dispatch.to_codex",
+          commandId,
+          senderDeviceId:
+            typeof command.senderDeviceId === "string"
+              ? command.senderDeviceId
+              : undefined,
+          meta: {
+            commandType: command.type,
+          },
+        });
+      }
+
       if (commandRouter) {
         commandRouter.handleCommand(command);
       }
@@ -450,7 +479,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
   const disconnectRelayCommand = vscode.commands.registerCommand(
     "codexRemote.disconnectRelay",
-    () => {
+    async () => {
       if (!relayClient || !relayClient.isConnectedToSession()) {
         vscode.window.showInformationMessage(
           "Codex Remote: 현재 연결된 릴레이 세션이 없습니다."
@@ -460,9 +489,26 @@ export async function activate(context: vscode.ExtensionContext) {
       }
 
       const previousSessionId = relayClient.getSessionId();
-      relayClient.stop();
+      if (!previousSessionId) {
+        vscode.window.showInformationMessage(
+          "Codex Remote: 세션 ID를 확인할 수 없습니다."
+        );
+        return;
+      }
+
+      const confirmLabel = "세션 종료";
+      const confirmed = await vscode.window.showWarningMessage(
+        `세션 ${previousSessionId}을(를) 종료합니다. 모바일/PC 연결이 모두 끊기며, 같은 세션 ID를 다시 시작할 수 있습니다.`,
+        { modal: true },
+        confirmLabel
+      );
+      if (confirmed !== confirmLabel) {
+        return;
+      }
+
+      const result = await relayClient.clearCurrentSession(false);
       outputChannel.appendLine(
-        `[${new Date().toLocaleTimeString()}] [Relay] 수동으로 릴레이 연결 종료${
+        `[${new Date().toLocaleTimeString()}] [Relay] 수동으로 릴레이 세션 종료${
           previousSessionId ? ` (세션: ${previousSessionId})` : ""
         }`
       );
@@ -471,11 +517,64 @@ export async function activate(context: vscode.ExtensionContext) {
         statusBarManager.refresh();
       }
       updateConnectionsView();
-      vscode.window.showInformationMessage(
-        previousSessionId
-          ? `Codex Remote: 릴레이 세션 ${previousSessionId} 연결을 종료했습니다.`
-          : "Codex Remote: 릴레이 연결을 종료했습니다."
+
+      if (result.success) {
+        vscode.window.showInformationMessage(
+          `Codex Remote: 세션 ${previousSessionId}을(를) 종료했습니다.`
+        );
+      } else {
+        vscode.window.showErrorMessage(
+          `Codex Remote: 세션 종료 실패 - ${result.error ?? "Unknown error"}`
+        );
+      }
+    }
+  );
+
+  const clearRelaySessionCommand = vscode.commands.registerCommand(
+    "codexRemote.clearRelaySession",
+    async () => {
+      if (!relayClient || !relayClient.isConnectedToSession()) {
+        vscode.window.showInformationMessage(
+          "Codex Remote: 현재 연결된 릴레이 세션이 없습니다."
+        );
+        updateConnectionsView();
+        return;
+      }
+
+      const sessionId = relayClient.getSessionId();
+      if (!sessionId) {
+        vscode.window.showInformationMessage(
+          "Codex Remote: 세션 ID를 확인할 수 없습니다."
+        );
+        return;
+      }
+
+      const confirmLabel = "세션 클리어";
+      const confirmed = await vscode.window.showWarningMessage(
+        `세션 ${sessionId}의 모바일 목록/대기 메시지/trace 로그를 정리합니다. PC 연결은 유지됩니다.`,
+        { modal: true },
+        confirmLabel
       );
+      if (confirmed !== confirmLabel) {
+        return;
+      }
+
+      const result = await relayClient.clearCurrentSession(true);
+      outputChannel.show();
+      if (statusBarManager) {
+        statusBarManager.refresh();
+      }
+      updateConnectionsView();
+
+      if (result.success) {
+        vscode.window.showInformationMessage(
+          `Codex Remote: 세션 ${sessionId}을(를) 클리어했습니다.`
+        );
+      } else {
+        vscode.window.showErrorMessage(
+          `Codex Remote: 세션 클리어 실패 - ${result.error ?? "Unknown error"}`
+        );
+      }
     }
   );
 
@@ -762,6 +861,9 @@ export async function activate(context: vscode.ExtensionContext) {
           case "disconnectRelay":
             await vscode.commands.executeCommand("codexRemote.disconnectRelay");
             break;
+          case "clearRelaySession":
+            await vscode.commands.executeCommand("codexRemote.clearRelaySession");
+            break;
           default:
             break;
         }
@@ -862,6 +964,7 @@ export async function activate(context: vscode.ExtensionContext) {
     showOutputCommand,
     refreshCodexStatusCommand,
     disconnectRelayCommand,
+    clearRelaySessionCommand,
     startCommand,
     stopCommand,
     toggleCommand,
