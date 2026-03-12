@@ -1,6 +1,6 @@
 {
   "name": "codex-relay-server",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "description": "Codex Relay Server for Vercel",
   "private": true,
   "type": "module",
@@ -9,6 +9,8 @@
     "build": "vercel build",
     "deploy": "vercel --prod",
     "type-check": "tsc --noEmit",
+    "test:trace-api-shape": "node --experimental-strip-types scripts/test-trace-api-shape.ts",
+    "test:trace-timeline": "node --experimental-strip-types scripts/test-trace-timeline.ts",
     "validate:command-event": "node scripts/validate-command-event-example.mjs",
     "test:command-policy": "node --experimental-strip-types scripts/test-command-policy.ts"
   },

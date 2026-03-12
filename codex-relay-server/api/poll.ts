@@ -6,6 +6,10 @@ import {
   updatePcLastSeen,
 } from "../lib/store.js";
 import { ApiResponse, RelayMessage, DeviceType } from "../lib/types.js";
+import {
+  appendTraceHopsBestEffort,
+  resolveTraceIdentity,
+} from "../lib/trace-ingest.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // CORS 헤더 설정
@@ -108,6 +112,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       maxLimit,
       deviceId as string | undefined
     );
+
+    if (messages.length > 0) {
+      const hop = deviceType === "pc" ? "ext.poll.recv" : "mobile.poll.recv";
+      await appendTraceHopsBestEffort(
+        messages.map((message) => {
+          const payload =
+            message.data && typeof message.data === "object"
+              ? (message.data as Record<string, unknown>)
+              : null;
+          const traceIdentity = resolveTraceIdentity(payload);
+          return {
+            sessionId,
+            hop,
+            traceId: traceIdentity.traceId,
+            commandId: traceIdentity.commandId,
+            relayMessageId: message.id,
+            senderDeviceId:
+              typeof message.senderDeviceId === "string"
+                ? message.senderDeviceId
+                : null,
+            targetDeviceId:
+              typeof message.targetDeviceId === "string"
+                ? message.targetDeviceId
+                : null,
+            clientId: payload && typeof payload.clientId === "string"
+              ? payload.clientId
+              : null,
+            meta: {
+              polledByDeviceType: deviceType,
+            },
+          };
+        })
+      );
+    }
 
     const response: ApiResponse<{ messages: RelayMessage[]; count: number }> = {
       success: true,

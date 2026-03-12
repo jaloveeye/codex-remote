@@ -9,7 +9,8 @@
   "command.showConnections": "Show Connections",
   "command.statusBarClick": "Open Codex Remote menu",
   "command.checkRelayServer": "Check Relay Server",
-  "command.disconnectRelay": "Disconnect Relay",
+  "command.disconnectRelay": "End Relay Session",
+  "command.clearRelaySession": "Clear Relay Session",
   "command.connectSessionById": "Connect to Relay Session by ID",
   "command.setRelaySessionId": "Set Relay Session ID",
 

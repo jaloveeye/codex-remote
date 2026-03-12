@@ -24,6 +24,10 @@
 3. **코드 변경 시 브랜치 규칙**
    - `skills/fm_15_git-flow.md`
    - Feature/Release/Hotfix 흐름 준수
+   - **Git Flow 테스트 게이트 상시 적용**
+     - feature: 변경 모듈 테스트 + (mobile 변경 시) `cd mobile-app && flutter test`
+     - release: `npm run build:extension` → `cd mobile-app && flutter test` → `node test-relay-full.js <RELAY_URL>` → `npm run test:relay:live -- --relay <RELAY_URL>`
+     - hotfix: 타깃 테스트 + 영향 모듈 회귀 테스트
 4. **세션 시작/중간/종료**
    - 시작: `skills/fm_01_session-onboarding.md`
    - 중요 결정/에러/절차는 즉시 기록: `skills/fm_02_fragment-writer.md`
@@ -33,6 +37,8 @@
 5. **변경 후 즉시 검증**
    - Superpowers의 `red-green` 취지에 맞춰 변경 직후 최소 1개 자동검증을 실행한다.
    - (예: `npm run compile`, `flutter test` 등 해당 모듈의 표준 점검)
+   - 스트리밍/응답 병합 로직 변경 시 추가로 아래를 반드시 실행:
+     - `cd mobile-app && flutter test test/services/streaming_text_merge_test.dart`
 
 ## 권장 참조
 - 에러 대응: `skills/fm_04_error-forensics.md`

@@ -233,7 +233,7 @@ class CommandRouter {
                     : undefined;
                 const useIdeContext = command.useIdeContext === true;
                 const useFlatMode = command.useFlatMode === true;
-                await this.commandHandler.insertToPrompt(text, execute, command.clientId, newSession, agentMode, command.senderDeviceId, model, reasoningEffort, useIdeContext, useFlatMode);
+                await this.commandHandler.insertToPrompt(text, execute, command.clientId, newSession, agentMode, command.senderDeviceId, command.traceId || command.id, model, reasoningEffort, useIdeContext, useFlatMode);
                 return {
                     success: true,
                     message: execute

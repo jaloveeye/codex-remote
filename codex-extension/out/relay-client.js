@@ -41,6 +41,7 @@ exports.RelayClient = void 0;
 const https = __importStar(require("https"));
 const http = __importStar(require("http"));
 const url_1 = require("url");
+const trace_emitter_1 = require("./trace_emitter");
 class RelayClient {
     constructor(relayServerUrl, outputChannel) {
         this.sessionId = null;
@@ -70,6 +71,11 @@ class RelayClient {
         this.relayServerUrl = relayServerUrl;
         this.deviceId = `pc-${Date.now()}`;
         this.outputChannel = outputChannel;
+        this.traceEmitter = new trace_emitter_1.TraceEmitter(async (events) => {
+            await this.httpRequest(`${this.relayServerUrl}/api/trace-events/batch`, "POST", {
+                events,
+            });
+        });
     }
     log(message, level = "info") {
         const timestamp = new Date().toLocaleTimeString();
@@ -82,6 +88,17 @@ class RelayClient {
         const logMessage = `[Relay] ERROR: ${message}${errorMessage ? ` - ${errorMessage}` : ""}`;
         this.outputChannel.appendLine(logMessage);
         console.error(logMessage, error);
+    }
+    recordTraceHop(input) {
+        if (!this.sessionId)
+            return;
+        const accepted = this.traceEmitter.emitTraceHop({
+            ...input,
+            sessionId: input.sessionId || this.sessionId,
+        });
+        if (!accepted)
+            return;
+        this.traceEmitter.flushNow().catch(() => undefined);
     }
     /**
      * Set callback for receiving messages from relay server
@@ -282,6 +299,31 @@ class RelayClient {
                         }
                         : basePayload;
                     const messageStr = typeof payload === "string" ? payload : JSON.stringify(payload);
+                    const payloadObj = payload && typeof payload === "object" && !Array.isArray(payload)
+                        ? payload
+                        : null;
+                    const traceId = (payloadObj && typeof payloadObj.traceId === "string" && payloadObj.traceId.trim()) ||
+                        (payloadObj && typeof payloadObj.id === "string" && payloadObj.id.trim()) ||
+                        null;
+                    const commandId = (payloadObj && typeof payloadObj.id === "string" && payloadObj.id.trim()) || null;
+                    this.recordTraceHop({
+                        traceId,
+                        sessionId: this.sessionId,
+                        hop: "ext.poll.recv",
+                        commandId,
+                        relayMessageId: typeof msg.id === "string" ? msg.id : undefined,
+                        senderDeviceId: typeof msg.senderDeviceId === "string"
+                            ? msg.senderDeviceId
+                            : undefined,
+                        targetDeviceId: typeof msg.targetDeviceId === "string"
+                            ? msg.targetDeviceId
+                            : undefined,
+                        meta: {
+                            messageType: payloadObj && typeof payloadObj.type === "string"
+                                ? payloadObj.type
+                                : msg.type,
+                        },
+                    });
                     this.log(`📤 Calling onMessageCallback with: ${messageStr.substring(0, 200)}`);
                     this.onMessageCallback(messageStr);
                     this.log(`✅ onMessageCallback completed`);
@@ -444,6 +486,23 @@ class RelayClient {
                     type: parsed.type || "message",
                     data: parsed,
                 });
+                const traceId = (typeof parsed.traceId === "string" && parsed.traceId.trim()) ||
+                    (typeof parsed.id === "string" && parsed.id.trim()) ||
+                    null;
+                const commandId = (typeof parsed.id === "string" && parsed.id.trim()) || null;
+                this.recordTraceHop({
+                    traceId,
+                    sessionId,
+                    hop: "ext.send.to_relay",
+                    commandId,
+                    senderDeviceId: this.deviceId,
+                    targetDeviceId: typeof parsed.targetDeviceId === "string"
+                        ? parsed.targetDeviceId
+                        : undefined,
+                    meta: {
+                        messageType: typeof parsed.type === "string" ? parsed.type : "message",
+                    },
+                });
                 if (!data) {
                     this.logError("Relay /api/send returned no data");
                     return;
@@ -472,6 +531,53 @@ class RelayClient {
      */
     isConnectedToSession() {
         return this.isConnected && this.sessionId !== null;
+    }
+    /**
+     * 현재 연결된 릴레이 세션을 서버에서 정리한다.
+     * keepPc=true(기본): 같은 세션 ID를 재생성하고 현재 PC 연결은 유지
+     */
+    async clearCurrentSession(keepPc = true) {
+        if (!this.sessionId || !this.isConnected) {
+            return { success: false, error: "No connected relay session" };
+        }
+        const currentSessionId = this.sessionId;
+        try {
+            const result = await this.httpRequestWithStatus(`${this.relayServerUrl}/api/session-clear`, "POST", {
+                sessionId: currentSessionId,
+                deviceId: this.deviceId,
+                keepPc,
+            });
+            if (result.statusCode >= 200 &&
+                result.statusCode < 300 &&
+                result.body?.success) {
+                const clearedCount = result.body?.data?.cleared?.mobileDeviceCount ?? "?";
+                if (keepPc) {
+                    this.sessionId = currentSessionId;
+                    this.isConnected = true;
+                    this.pcInUse = false;
+                    this.startHeartbeat();
+                    this.log(`🧹 세션 ${currentSessionId} 정리 완료 (모바일 ${clearedCount}개 정리, PC 연결 유지)`);
+                }
+                else {
+                    this.clearHeartbeat();
+                    this.sessionId = null;
+                    this.isConnected = false;
+                    this.log(`🧹 세션 ${currentSessionId} 정리 완료 (모바일 ${clearedCount}개 정리, 연결 종료)`);
+                }
+                return { success: true };
+            }
+            const errMsg = result.body?.error ??
+                (typeof result.body === "object" && result.body !== null
+                    ? JSON.stringify(result.body)
+                    : `HTTP ${result.statusCode}`);
+            this.logError("Failed to clear relay session", errMsg);
+            return { success: false, error: String(errMsg) };
+        }
+        catch (error) {
+            const errMsg = error instanceof Error ? error.message : String(error);
+            this.logError("Failed to clear relay session", errMsg);
+            return { success: false, error: errMsg };
+        }
     }
     /**
      * 릴레이 서버 상태 확인 (디버그 API 호출)

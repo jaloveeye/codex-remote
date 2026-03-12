@@ -47,7 +47,7 @@ If you want remote relay mode, set this in VS Code settings:
 
 ```json
 {
-  "codexRemote.relayServerUrl": "https://your-relay.example.com"
+  "codexRemote.relayServerUrl": "https://codex-relay.jaloveeye.com"
 }
 ```
 
@@ -60,6 +60,27 @@ If you want remote relay mode, set this in VS Code settings:
 5. Open the mobile or web client and connect with the same session ID
 6. Send prompts and receive streamed Codex responses
 7. When available, choose agent mode, model, and reasoning effort from the client UI
+
+### Streaming regression tests
+
+- Deterministic merge tests (mobile app):
+
+```bash
+cd mobile-app
+flutter test test/services/streaming_text_merge_test.dart
+```
+
+- Live relay + extension roundtrip test (requires a connected PC extension):
+
+```bash
+npm run test:relay:live -- --relay https://codex-relay.jaloveeye.com
+```
+
+- Relay trace smoke test (requires relay deployment with `/api/trace-events/batch`):
+
+```bash
+npm run test:relay:trace:smoke -- --relay https://codex-relay.jaloveeye.com
+```
 
 ### Repository layout
 
@@ -124,7 +145,7 @@ codex auth login
 
 ```json
 {
-  "codexRemote.relayServerUrl": "https://your-relay.example.com"
+  "codexRemote.relayServerUrl": "https://codex-relay.jaloveeye.com"
 }
 ```
 
@@ -137,6 +158,27 @@ codex auth login
 5. 모바일 또는 웹 클라이언트에서 같은 세션 ID로 연결합니다
 6. 프롬프트를 보내고 스트리밍 Codex 응답을 받습니다
 7. 지원되는 경우 클라이언트 UI에서 agent mode, model, reasoning effort를 선택합니다
+
+### 스트리밍 회귀 테스트
+
+- 결정적 병합 테스트(모바일 앱):
+
+```bash
+cd mobile-app
+flutter test test/services/streaming_text_merge_test.dart
+```
+
+- 실전 릴레이+익스텐션 라운드트립 테스트(PC 익스텐션 연결 필요):
+
+```bash
+npm run test:relay:live -- --relay https://codex-relay.jaloveeye.com
+```
+
+- 릴레이 Trace 스모크 테스트(`/api/trace-events/batch` 배포 필요):
+
+```bash
+npm run test:relay:trace:smoke -- --relay https://codex-relay.jaloveeye.com
+```
 
 ### 저장소 구조
 

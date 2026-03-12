@@ -1,0 +1,178 @@
+name: Git Flow Branch Gates
+
+on:
+  push:
+    branches:
+      - 'feature/**'
+      - 'release/**'
+      - 'hotfix/**'
+  workflow_dispatch:
+    inputs:
+      relay_url:
+        description: Relay URL override (release/hotfix relay tests)
+        required: false
+        type: string
+      session_id:
+        description: Session ID with connected extension (release live gate)
+        required: false
+        type: string
+
+concurrency:
+  group: gitflow-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  branch-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      RELAY_URL: ${{ github.event.inputs.relay_url || secrets.GATE_RELAY_URL || secrets.NIGHTLY_RELAY_URL || 'https://codex-relay.jaloveeye.com' }}
+      LIVE_SESSION_ID: ${{ github.event.inputs.session_id || secrets.GATE_E2E_SESSION_ID || secrets.NIGHTLY_E2E_SESSION_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Detect branch and changed areas
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+          BRANCH_TYPE="unknown"
+          if [[ "$BRANCH_NAME" == feature/* ]]; then
+            BRANCH_TYPE="feature"
+          elif [[ "$BRANCH_NAME" == release/* ]]; then
+            BRANCH_TYPE="release"
+          elif [[ "$BRANCH_NAME" == hotfix/* ]]; then
+            BRANCH_TYPE="hotfix"
+          fi
+
+          BASE_SHA="${{ github.event.before }}"
+          if [[ -z "${BASE_SHA:-}" || "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            BASE_SHA="$(git rev-list --max-count=1 HEAD^ || true)"
+          fi
+
+          if [[ -n "${BASE_SHA:-}" ]]; then
+            git diff --name-only "$BASE_SHA" "$GITHUB_SHA" > changed_files.txt
+          else
+            git ls-tree -r --name-only HEAD > changed_files.txt
+          fi
+
+          MOBILE_CHANGED=false
+          EXTENSION_CHANGED=false
+          RELAY_CHANGED=false
+          STREAMING_MERGE_CHANGED=false
+
+          grep -Eq '^mobile-app/' changed_files.txt && MOBILE_CHANGED=true || true
+          grep -Eq '^codex-extension/' changed_files.txt && EXTENSION_CHANGED=true || true
+          grep -Eq '^(codex-relay-server/|test-relay-.*\.js$|package\.json$)' changed_files.txt && RELAY_CHANGED=true || true
+          grep -Eq '^mobile-app/lib/services/streaming_text_merge\.dart$' changed_files.txt && STREAMING_MERGE_CHANGED=true || true
+
+          NEEDS_FLUTTER=false
+          if [[ "$BRANCH_TYPE" == "release" || "$MOBILE_CHANGED" == "true" ]]; then
+            NEEDS_FLUTTER=true
+          fi
+
+          echo "branch_name=$BRANCH_NAME" >> "$GITHUB_OUTPUT"
+          echo "branch_type=$BRANCH_TYPE" >> "$GITHUB_OUTPUT"
+          echo "mobile_changed=$MOBILE_CHANGED" >> "$GITHUB_OUTPUT"
+          echo "extension_changed=$EXTENSION_CHANGED" >> "$GITHUB_OUTPUT"
+          echo "relay_changed=$RELAY_CHANGED" >> "$GITHUB_OUTPUT"
+          echo "streaming_merge_changed=$STREAMING_MERGE_CHANGED" >> "$GITHUB_OUTPUT"
+          echo "needs_flutter=$NEEDS_FLUTTER" >> "$GITHUB_OUTPUT"
+
+      - name: Gate summary
+        run: |
+          echo "branch=${{ steps.detect.outputs.branch_name }} (${{ steps.detect.outputs.branch_type }})"
+          echo "mobile_changed=${{ steps.detect.outputs.mobile_changed }}"
+          echo "extension_changed=${{ steps.detect.outputs.extension_changed }}"
+          echo "relay_changed=${{ steps.detect.outputs.relay_changed }}"
+          echo "streaming_merge_changed=${{ steps.detect.outputs.streaming_merge_changed }}"
+
+      - name: Setup Flutter
+        if: steps.detect.outputs.needs_flutter == 'true'
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # Feature gates
+      - name: Feature gate - extension build
+        if: steps.detect.outputs.branch_type == 'feature' && steps.detect.outputs.extension_changed == 'true'
+        run: npm run build:extension
+
+      - name: Feature gate - mobile tests
+        if: steps.detect.outputs.branch_type == 'feature' && steps.detect.outputs.mobile_changed == 'true'
+        run: |
+          cd mobile-app
+          flutter pub get
+          flutter test
+
+      - name: Feature gate - streaming merge focused test
+        if: steps.detect.outputs.branch_type == 'feature' && steps.detect.outputs.streaming_merge_changed == 'true'
+        run: |
+          cd mobile-app
+          flutter test test/services/streaming_text_merge_test.dart
+
+      - name: Feature gate - no relevant code changes
+        if: steps.detect.outputs.branch_type == 'feature' && steps.detect.outputs.mobile_changed != 'true' && steps.detect.outputs.extension_changed != 'true' && steps.detect.outputs.relay_changed != 'true'
+        run: echo "No feature gate target files changed. Passing."
+
+      # Release gates
+      - name: Release gate - validate live test session
+        if: steps.detect.outputs.branch_type == 'release'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${LIVE_SESSION_ID:-}" ]]; then
+            echo "::error::LIVE_SESSION_ID is empty. Set GATE_E2E_SESSION_ID (or NIGHTLY_E2E_SESSION_ID) secret, or pass workflow_dispatch session_id input."
+            exit 1
+          fi
+
+      - name: Release gate - extension build
+        if: steps.detect.outputs.branch_type == 'release'
+        run: npm run build:extension
+
+      - name: Release gate - mobile tests
+        if: steps.detect.outputs.branch_type == 'release'
+        run: |
+          cd mobile-app
+          flutter pub get
+          flutter test
+
+      - name: Release gate - relay smoke
+        if: steps.detect.outputs.branch_type == 'release'
+        run: node test-relay-full.js "$RELAY_URL"
+
+      - name: Release gate - relay live roundtrip
+        if: steps.detect.outputs.branch_type == 'release'
+        run: npm run test:relay:live -- --relay "$RELAY_URL" --session "$LIVE_SESSION_ID"
+
+      # Hotfix gates
+      - name: Hotfix gate - baseline regression (extension build)
+        if: steps.detect.outputs.branch_type == 'hotfix'
+        run: npm run build:extension
+
+      - name: Hotfix gate - mobile tests
+        if: steps.detect.outputs.branch_type == 'hotfix' && steps.detect.outputs.mobile_changed == 'true'
+        run: |
+          cd mobile-app
+          flutter pub get
+          flutter test
+
+      - name: Hotfix gate - relay smoke
+        if: steps.detect.outputs.branch_type == 'hotfix' && steps.detect.outputs.relay_changed == 'true'
+        run: node test-relay-full.js "$RELAY_URL"

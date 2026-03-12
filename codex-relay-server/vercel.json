@@ -10,6 +10,26 @@
       "destination": "/api/stream.ts"
     },
     {
+      "source": "/api/trace/recent",
+      "destination": "/api/trace-recent.ts"
+    },
+    {
+      "source": "/api/trace/:traceId/timeline",
+      "destination": "/api/trace-timeline.ts?traceId=:traceId"
+    },
+    {
+      "source": "/api/trace/:traceId/summary",
+      "destination": "/api/trace-summary.ts?traceId=:traceId"
+    },
+    {
+      "source": "/api/trace-event",
+      "destination": "/api/trace-event.ts"
+    },
+    {
+      "source": "/api/trace-events/batch",
+      "destination": "/api/trace-events-batch.ts"
+    },
+    {
       "source": "/api/:path*",
       "destination": "/api/:path*.ts"
     }

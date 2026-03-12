@@ -27,6 +27,7 @@ class ApprovalsTabView extends StatelessWidget {
     required this.onResolveCommandApproval,
     required this.onMarkRelayApprovalLater,
     required this.truncateForLog,
+    this.tracePanel,
   });
 
   final bool isConnected;
@@ -53,6 +54,7 @@ class ApprovalsTabView extends StatelessWidget {
       onResolveCommandApproval;
   final void Function(Map<String, dynamic>) onMarkRelayApprovalLater;
   final String Function(String value, {int maxLength}) truncateForLog;
+  final Widget? tracePanel;
 
   @override
   Widget build(BuildContext context) {
@@ -396,6 +398,19 @@ class ApprovalsTabView extends StatelessWidget {
                 ),
               );
             }),
+          if (tracePanel != null) ...[
+            const SizedBox(height: 16),
+            Text(
+              'Trace timeline',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
+            ),
+            const SizedBox(height: 8),
+            tracePanel!,
+          ],
         ],
       ),
     );

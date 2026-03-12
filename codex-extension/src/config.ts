@@ -7,7 +7,7 @@ export const CONFIG = {
     WEBSOCKET_PORT: 8766,
 
     // Relay server URL
-    RELAY_SERVER_URL: process.env.RELAY_SERVER_URL || 'https://relay.example.com',
+    RELAY_SERVER_URL: process.env.RELAY_SERVER_URL || 'https://codex-relay.jaloveeye.com',
 
     // Codex app-server command
     CODEX_COMMAND: process.env.CODEX_COMMAND || 'codex',

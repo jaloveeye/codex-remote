@@ -1,0 +1,60 @@
+name: Nightly Live Relay Roundtrip
+
+on:
+  schedule:
+    - cron: '0 17 * * *' # 02:00 KST (17:00 UTC)
+  workflow_dispatch:
+    inputs:
+      relay_url:
+        description: Relay URL override
+        required: false
+        type: string
+      session_id:
+        description: Session ID with connected extension
+        required: false
+        type: string
+      prompt:
+        description: Prompt for live test
+        required: false
+        default: hello
+        type: string
+
+jobs:
+  live-roundtrip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      RELAY_URL: ${{ github.event.inputs.relay_url || secrets.NIGHTLY_RELAY_URL || 'https://codex-relay.jaloveeye.com' }}
+      SESSION_ID: ${{ github.event.inputs.session_id || secrets.NIGHTLY_E2E_SESSION_ID }}
+      E2E_PROMPT: ${{ github.event.inputs.prompt || 'hello' }}
+      E2E_WAIT_PC_MS: '30000'
+      E2E_TIMEOUT_MS: '120000'
+      E2E_POLL_INTERVAL_MS: '1000'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate live config
+        id: validate
+        run: |
+          if [ -z "$SESSION_ID" ]; then
+            echo "::warning::NIGHTLY_E2E_SESSION_ID secret (or workflow_dispatch session_id input) is empty. Skipping live test."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run live relay roundtrip test
+        if: steps.validate.outputs.skip != 'true'
+        run: npm run test:relay:live -- --relay "$RELAY_URL" --session "$SESSION_ID"

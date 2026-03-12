@@ -9,7 +9,8 @@
   "command.showConnections": "연결 상태 보기",
   "command.statusBarClick": "Codex Remote 메뉴 열기",
   "command.checkRelayServer": "릴레이 서버 상태 확인",
-  "command.disconnectRelay": "릴레이 연결 끊기",
+  "command.disconnectRelay": "릴레이 세션 종료",
+  "command.clearRelaySession": "릴레이 세션 클리어",
   "command.connectSessionById": "릴레이 세션 ID로 연결",
   "command.setRelaySessionId": "릴레이 세션 ID 설정",
 
