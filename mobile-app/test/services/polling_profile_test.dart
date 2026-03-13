@@ -11,10 +11,10 @@ void main() {
         hasPendingCodexRequests: false,
       );
 
-      expect(ms, 2000);
+      expect(ms, relayPollIntervalIdleMs);
     });
 
-    test('응답 대기/수신/승인 대기 중에는 500ms', () {
+    test('응답 대기/수신/승인 대기 중에는 active interval', () {
       expect(
         relayPollIntervalMs(
           waitingForResponse: true,
@@ -22,7 +22,7 @@ void main() {
           hasPendingRelayApprovals: false,
           hasPendingCodexRequests: false,
         ),
-        500,
+        relayPollIntervalActiveMs,
       );
 
       expect(
@@ -32,7 +32,7 @@ void main() {
           hasPendingRelayApprovals: false,
           hasPendingCodexRequests: false,
         ),
-        500,
+        relayPollIntervalActiveMs,
       );
 
       expect(
@@ -42,7 +42,7 @@ void main() {
           hasPendingRelayApprovals: true,
           hasPendingCodexRequests: false,
         ),
-        500,
+        relayPollIntervalActiveMs,
       );
     });
   });

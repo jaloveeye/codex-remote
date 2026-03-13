@@ -850,6 +850,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Timer? _capabilitiesFollowupTimer;
   bool _isRelayPollInFlight = false;
   int _lastRelayPollStartedAtMs = 0;
+  int _traceIdSequence = 0;
   static const Duration _pollSchedulerTick = Duration(milliseconds: 250);
 
   // 스트리밍 관련
@@ -919,7 +920,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   // 런타임 옵션 관련
   String _selectedAgentMode = 'auto'; // 내부는 auto 유지
   String _selectedModel = 'auto';
-  String _selectedReasoningEffort = 'auto';
+  String _selectedReasoningEffort = 'low';
   bool _useIdeContext = false;
   bool _useFlatMode = false;
   bool _capabilitiesLoaded = false;
@@ -1063,8 +1064,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   TraceApiService get _traceApi =>
       TraceApiService(relayServerUrl: _effectiveRelayServerUrl);
 
-  String _newTraceId() =>
-      'trc_${DateTime.now().millisecondsSinceEpoch}_${_deviceId.hashCode.abs()}';
+  String _newTraceId() {
+    final nowUs = DateTime.now().microsecondsSinceEpoch;
+    _traceIdSequence = (_traceIdSequence + 1) % 1000;
+    final seq = _traceIdSequence.toString().padLeft(3, '0');
+    return 'trc_${nowUs}_${_deviceId.hashCode.abs()}_$seq';
+  }
 
   String? _extractTraceIdFromPayload(Map<String, dynamic>? payload) {
     if (payload == null) return null;
@@ -1863,6 +1868,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         setState(() {
           _sessionId = sessionId;
           _isConnected = true;
+          _isWaitingForResponse = false;
+          _streamingMessageIndex = null;
+          _streamingText = '';
           _isReconnecting = false;
           _reconnectAttempts = 0;
           _lastConnectionError = null;
@@ -3155,6 +3163,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       setState(() {
         _isConnected = false;
         _sessionId = null;
+        _isWaitingForResponse = false;
+        _streamingMessageIndex = null;
+        _streamingText = '';
         _isReconnecting = false;
         _isConnectionActionInProgress = false;
         _connectionActionLabel = null;
@@ -8103,17 +8114,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          Theme.of(context).colorScheme.primary,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
                     Text(
                       AppI18n.t(
                         context,

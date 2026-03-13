@@ -50,16 +50,27 @@ export class RelayClient {
   private lastPollAt: number = 0;
   private lastRelayActivityAt: number = 0;
   private readonly SESSION_DISCOVERY_INTERVAL = 5000; // 5초마다 세션 탐지 (빠른 연결용)
-  private readonly POLL_IDLE_INTERVAL = 2000; // 기본 2초 폴링
-  private readonly POLL_ACTIVE_INTERVAL = 500; // 활성 상태 0.5초 폴링
-  private readonly POLL_LOOP_TICK = 250; // 내부 스케줄러 tick
-  private readonly POLL_ACTIVITY_WINDOW_MS = 15000; // 최근 활동 15초는 활성 폴링
+  private readonly POLL_IDLE_INTERVAL = 1000; // 유휴 상태 1초 폴링
+  private readonly POLL_ACTIVE_INTERVAL = 250; // 활성 상태 0.25초 폴링
+  private readonly POLL_LOOP_TICK = 100; // 내부 스케줄러 tick
+  private readonly POLL_ACTIVITY_WINDOW_MS = 60000; // 최근 활동 60초는 활성 폴링 유지
   private readonly POLL_HEARTBEAT_INTERVAL = 30000; // 30초마다 폴링 동작 로그
   /** 연결 유지용 heartbeat (2분 무heartbeat 시 서버가 연결 끊김으로 간주) */
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private readonly HEARTBEAT_INTERVAL_MS = 30 * 1000; // 30초마다 heartbeat
   /** 릴레이로 보내는 메시지 순서 보장용 직렬화 큐 */
   private sendQueue: Promise<void> = Promise.resolve();
+  /** 서버 disconnect 중복 호출 방지 */
+  private disconnectInFlight: Promise<{ success: boolean; error?: string }> | null =
+    null;
+  /** poll 중복 실행 방지 */
+  private pollInFlight: boolean = false;
+  /** connect 중복 실행 방지 */
+  private connectInFlight: Promise<void> | null = null;
+  /** stop 이후 stale 비동기 응답 무시용 실행 토큰 */
+  private runToken: number = 0;
+  /** 현재 relay loop 실행 여부 */
+  private isRunning: boolean = false;
   private traceEmitter: TraceEmitter;
 
   constructor(relayServerUrl: string, outputChannel: vscode.OutputChannel) {
@@ -141,8 +152,12 @@ export class RelayClient {
       this.sessionId = null;
       this.isConnected = false;
     }
+    this.targetSessionId = trimmed;
     this.targetPin =
       pin != null && typeof pin === "string" && pin.trim() ? pin.trim() : null;
+    this.isRunning = true;
+    this.runToken += 1;
+    this.startPolling();
     await this.connectToSession(trimmed, this.targetPin ?? undefined);
   }
 
@@ -160,6 +175,8 @@ export class RelayClient {
     this.targetPin =
       pin != null && typeof pin === "string" && pin.trim() ? pin.trim() : null;
     this.pcInUse = false;
+    this.isRunning = true;
+    this.runToken += 1;
     this.log("Starting relay client...");
     this.log(`Relay Server: ${this.relayServerUrl}`);
     this.log(`Device ID: ${this.deviceId}`);
@@ -175,13 +192,19 @@ export class RelayClient {
    * Stop relay client
    */
   stop(): void {
+    this.isRunning = false;
+    this.runToken += 1;
     this.clearHeartbeat();
     if (this.pollInterval) {
       clearInterval(this.pollInterval);
       this.pollInterval = null;
     }
+    this.pollInFlight = false;
+    this.connectInFlight = null;
     this.isConnected = false;
     this.sessionId = null;
+    this.targetSessionId = null;
+    this.targetPin = null;
     this.pcInUse = false;
     this.log("Relay client stopped");
   }
@@ -222,17 +245,25 @@ export class RelayClient {
       clearInterval(this.pollInterval);
     }
     this.lastPollAt = 0;
+    const pollingRunToken = this.runToken;
     this.pollInterval = setInterval(() => {
+      if (!this.isRunning || pollingRunToken !== this.runToken) return;
       const now = Date.now();
       const interval = this.getCurrentPollIntervalMs(now);
       if (now - this.lastPollAt < interval) return;
+      if (this.pollInFlight) return;
       this.lastPollAt = now;
-      this.pollMessages().catch((err) => {
-        this.logError("pollMessages threw", err);
-      });
+      this.pollInFlight = true;
+      this.pollMessages()
+        .catch((err) => {
+          this.logError("pollMessages threw", err);
+        })
+        .finally(() => {
+          this.pollInFlight = false;
+        });
     }, this.POLL_LOOP_TICK);
     this.log(
-      "⏱️ Adaptive poll interval started (idle 2s / active 0.5s)"
+      "⏱️ Adaptive poll interval started (idle 1s / active 0.25s)"
     );
   }
 
@@ -245,6 +276,7 @@ export class RelayClient {
    * Poll messages from relay server; when no session, try connect to targetSessionId
    */
   private async pollMessages(): Promise<void> {
+    if (!this.isRunning) return;
     // If no session, try to connect to targetSessionId (입력한 세션 ID만 연결)
     if (!this.sessionId) {
       if (this.pcInUse) return;
@@ -504,75 +536,92 @@ export class RelayClient {
    * pin: PC가 설정하면 모바일은 이 PIN을 알아야만 접속 가능 (세션 ID만으로 타인 접속 방지)
    */
   private async connectToSession(sid: string, pin?: string): Promise<void> {
-    this.log(`🔗 Connecting to session ${sid}...`);
-
-    try {
-      const body: Record<string, string> = {
-        sessionId: sid,
-        deviceId: this.deviceId,
-        deviceType: "pc",
-      };
-      if (pin != null && pin.trim()) {
-        body.pin = pin.trim();
-      }
-      const result = await this.httpRequestWithStatus(
-        `${this.relayServerUrl}/api/connect`,
-        "POST",
-        body
-      );
-
-      if (result.statusCode === 409) {
-        this.pcInUse = true;
-        const msg =
-          (result.body as any)?.error ?? "Session already in use by another PC";
-        this.logError(
-          "중복 사용 중인 세션 ID (다른 PC에서 사용 중입니다)",
-          msg
-        );
-        this.log(
-          "💡 다른 PC 창을 닫거나, 모바일에서 새 세션을 만든 뒤 해당 세션 ID를 입력하세요."
-        );
-        return;
-      }
-
-      if (result.statusCode === 404) {
-        this.log(
-          "세션을 찾을 수 없습니다. 모바일에서 먼저 세션을 생성·연결한 뒤 같은 세션 ID로 접속하세요."
-        );
-        return;
-      }
-
-      if (
-        result.statusCode >= 200 &&
-        result.statusCode < 300 &&
-        result.body?.success
-      ) {
-        this.sessionId = sid;
-        this.isConnected = true;
-        this.startHeartbeat();
-        this.log(
-          `✅ 익스텐션은 릴레이 서버를 통해 세션 ${this.sessionId}에 접속했습니다.`
-        );
-        this.log(`💡 모바일에서 세션 ID ${this.sessionId}로 연결하세요.`);
-        if (this.onSessionConnectedCallback) {
-          this.onSessionConnectedCallback();
-        }
-      } else {
-        const errMsg =
-          (result.body as any)?.error ??
-          (typeof result.body === "object" && result.body !== null
-            ? JSON.stringify(result.body)
-            : String(result.statusCode));
-        this.logError(`Failed to connect: ${errMsg}`);
-        if (result.statusCode >= 500 && result.body) {
-          this.logError(
-            `[Relay] Server 500 response: ${JSON.stringify(result.body)}`
-          );
-        }
-      }
-    } catch (error) {
-      this.logError("Error connecting to session", error);
+    if (this.connectInFlight) {
+      return this.connectInFlight;
     }
+
+    const connectRunToken = this.runToken;
+    this.connectInFlight = (async () => {
+      this.log(`🔗 Connecting to session ${sid}...`);
+
+      try {
+        const body: Record<string, string> = {
+          sessionId: sid,
+          deviceId: this.deviceId,
+          deviceType: "pc",
+        };
+        if (pin != null && pin.trim()) {
+          body.pin = pin.trim();
+        }
+        const result = await this.httpRequestWithStatus(
+          `${this.relayServerUrl}/api/connect`,
+          "POST",
+          body
+        );
+
+        if (!this.isRunning || connectRunToken !== this.runToken) {
+          this.log(`ℹ️ Ignored stale connect response for session ${sid}`);
+          return;
+        }
+
+        if (result.statusCode === 409) {
+          this.pcInUse = true;
+          const msg =
+            (result.body as any)?.error ??
+            "Session already in use by another PC";
+          this.logError(
+            "중복 사용 중인 세션 ID (다른 PC에서 사용 중입니다)",
+            msg
+          );
+          this.log(
+            "💡 다른 PC 창을 닫거나, 모바일에서 새 세션을 만든 뒤 해당 세션 ID를 입력하세요."
+          );
+          return;
+        }
+
+        if (result.statusCode === 404) {
+          this.log(
+            "세션을 찾을 수 없습니다. 모바일에서 먼저 세션을 생성·연결한 뒤 같은 세션 ID로 접속하세요."
+          );
+          return;
+        }
+
+        if (
+          result.statusCode >= 200 &&
+          result.statusCode < 300 &&
+          result.body?.success
+        ) {
+          this.sessionId = sid;
+          this.isConnected = true;
+          this.startHeartbeat();
+          this.log(
+            `✅ 익스텐션은 릴레이 서버를 통해 세션 ${this.sessionId}에 접속했습니다.`
+          );
+          this.log(`💡 모바일에서 세션 ID ${this.sessionId}로 연결하세요.`);
+          if (this.onSessionConnectedCallback) {
+            this.onSessionConnectedCallback();
+          }
+        } else {
+          const errMsg =
+            (result.body as any)?.error ??
+            (typeof result.body === "object" && result.body !== null
+              ? JSON.stringify(result.body)
+              : String(result.statusCode));
+          this.logError(`Failed to connect: ${errMsg}`);
+          if (result.statusCode >= 500 && result.body) {
+            this.logError(
+              `[Relay] Server 500 response: ${JSON.stringify(result.body)}`
+            );
+          }
+        }
+      } catch (error) {
+        this.logError("Error connecting to session", error);
+      } finally {
+        this.connectInFlight = null;
+      }
+    })();
+
+    return this.connectInFlight;
   }
 
   /**
@@ -667,6 +716,73 @@ export class RelayClient {
   }
 
   /**
+   * 현재 연결된 릴레이 세션에서 PC를 서버 기준으로 즉시 분리한다.
+   * 실패해도 로컬 연결 상태는 stop()으로 정리한다.
+   */
+  async disconnectCurrentSession(): Promise<{ success: boolean; error?: string }> {
+    if (this.disconnectInFlight) {
+      return this.disconnectInFlight;
+    }
+
+    this.disconnectInFlight = (async () => {
+      const currentSessionId = this.sessionId;
+      const wasConnected = this.isConnected;
+
+      if (!currentSessionId || !wasConnected) {
+        this.stop();
+        return { success: true };
+      }
+
+      try {
+        const result = await this.httpRequestWithStatus(
+          `${this.relayServerUrl}/api/disconnect`,
+          "POST",
+          {
+            sessionId: currentSessionId,
+            deviceId: this.deviceId,
+            deviceType: "pc",
+          }
+        );
+
+        if (
+          result.statusCode >= 200 &&
+          result.statusCode < 300 &&
+          result.body?.success
+        ) {
+          this.log(`🔌 릴레이 세션 ${currentSessionId} 서버 연결 해제 완료`);
+          return { success: true };
+        }
+
+        if (result.statusCode === 404) {
+          // 서버에 세션이 이미 없어도 로컬 정리 목적에는 성공으로 간주
+          this.log(
+            `ℹ️ 릴레이 세션 ${currentSessionId}는 서버에 이미 없음(로컬 연결 정리 진행)`
+          );
+          return { success: true };
+        }
+
+        const errMsg =
+          (result.body as any)?.error ??
+          (typeof result.body === "object" && result.body !== null
+            ? JSON.stringify(result.body)
+            : `HTTP ${result.statusCode}`);
+        this.logError("Failed to disconnect relay session", errMsg);
+        return { success: false, error: String(errMsg) };
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        this.logError("Failed to disconnect relay session", errMsg);
+        return { success: false, error: errMsg };
+      } finally {
+        this.stop();
+      }
+    })();
+
+    const result = await this.disconnectInFlight;
+    this.disconnectInFlight = null;
+    return result;
+  }
+
+  /**
    * 현재 연결된 릴레이 세션을 서버에서 정리한다.
    * keepPc=true(기본): 같은 세션 ID를 재생성하고 현재 PC 연결은 유지
    */
@@ -678,6 +794,11 @@ export class RelayClient {
     }
 
     const currentSessionId = this.sessionId;
+    if (!keepPc) {
+      // 세션 종료 요청 시에는 즉시 로컬 폴링/자동 재연결 루프를 중단해
+      // stale poll/connect가 다시 세션을 붙잡지 않도록 한다.
+      this.stop();
+    }
 
     try {
       const result = await this.httpRequestWithStatus(
@@ -707,9 +828,6 @@ export class RelayClient {
             `🧹 세션 ${currentSessionId} 정리 완료 (모바일 ${clearedCount}개 정리, PC 연결 유지)`
           );
         } else {
-          this.clearHeartbeat();
-          this.sessionId = null;
-          this.isConnected = false;
           this.log(
             `🧹 세션 ${currentSessionId} 정리 완료 (모바일 ${clearedCount}개 정리, 연결 종료)`
           );

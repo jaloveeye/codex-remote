@@ -1536,7 +1536,15 @@ export class CodexHandler {
 
     this.forwardRawCodexNotification(method, params);
 
-    if (key.includes("turn") || key.includes("agent") || key.includes("error")) {
+    const isReasoningNoise =
+      key.includes("agentreasoningdelta") ||
+      key.includes("agentreasoningsectionbreak") ||
+      key.includes("agentreasoning");
+
+    if (
+      !isReasoningNoise &&
+      (key.includes("turn") || key.includes("agent") || key.includes("error"))
+    ) {
       this.log(
         `[CODEX] ignored rpc notification method=${method}, params=${JSON.stringify(
           params
@@ -1581,6 +1589,10 @@ export class CodexHandler {
     if (merged.next === state.accumulatedText) return;
 
     state.accumulatedText = merged.next;
+    if (!CONFIG.STREAM_CHAT_CHUNKS) {
+      this.clientTurnStates.set(clientId, state);
+      return;
+    }
     state.hasChunks = true;
     this.clientTurnStates.set(clientId, state);
 
@@ -1617,6 +1629,10 @@ export class CodexHandler {
     if (merged.next === state.accumulatedText) return;
 
     state.accumulatedText = merged.next;
+    if (!CONFIG.STREAM_CHAT_CHUNKS) {
+      this.clientTurnStates.set(clientId, state);
+      return;
+    }
     state.hasChunks = true;
     this.clientTurnStates.set(clientId, state);
 
@@ -1674,7 +1690,7 @@ export class CodexHandler {
         );
       }
 
-      if (state.hasChunks && canPromoteCompleted) {
+      if (CONFIG.STREAM_CHAT_CHUNKS && state.hasChunks && canPromoteCompleted) {
         this.wsServer.send(
           JSON.stringify({
             type: "chat_response_chunk",
@@ -1702,7 +1718,9 @@ export class CodexHandler {
       );
     }
 
-    if (finalText && !state.hasChunks) {
+    const streamedChunks = CONFIG.STREAM_CHAT_CHUNKS && state.hasChunks;
+
+    if (finalText && !streamedChunks) {
       this.wsServer.send(
         JSON.stringify({
           type: "chat_response",
@@ -1715,13 +1733,13 @@ export class CodexHandler {
           traceId: state.traceId || undefined,
         })
       );
-    } else if (finalText && state.hasChunks) {
+    } else if (finalText && streamedChunks) {
       this.log(
         `[CODEX] skip final chat_response because stream chunks were already emitted (len=${finalText.length})`
       );
     }
 
-    if (state.hasChunks) {
+    if (streamedChunks) {
       this.wsServer.send(
         JSON.stringify({
           type: "chat_response_complete",

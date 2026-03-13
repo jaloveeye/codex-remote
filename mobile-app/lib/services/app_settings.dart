@@ -76,7 +76,7 @@ class AppSettings extends ChangeNotifier {
   bool _showHistory = false; // 기본값: 숨김
   String _defaultAgentMode = 'auto';
   String _defaultModel = 'auto';
-  String _defaultReasoningEffort = 'auto';
+  String _defaultReasoningEffort = 'low';
   bool _autoConnect = false;
   AppLanguageSetting _appLanguage = AppLanguageSetting.system;
   List<ConnectionHistoryItem> _connectionHistory = [];
@@ -132,7 +132,7 @@ class AppSettings extends ChangeNotifier {
 
     // 기본 이성(추론) 수준
     _defaultReasoningEffort =
-        prefs.getString(_keyDefaultReasoningEffort) ?? 'auto';
+        prefs.getString(_keyDefaultReasoningEffort) ?? 'low';
 
     // 자동 연결
     _autoConnect = prefs.getBool(_keyAutoConnect) ?? false;

@@ -1130,7 +1130,11 @@ class CodexHandler {
             return;
         }
         this.forwardRawCodexNotification(method, params);
-        if (key.includes("turn") || key.includes("agent") || key.includes("error")) {
+        const isReasoningNoise = key.includes("agentreasoningdelta") ||
+            key.includes("agentreasoningsectionbreak") ||
+            key.includes("agentreasoning");
+        if (!isReasoningNoise &&
+            (key.includes("turn") || key.includes("agent") || key.includes("error"))) {
             this.log(`[CODEX] ignored rpc notification method=${method}, params=${JSON.stringify(params).substring(0, 300)}`);
         }
     }
@@ -1168,6 +1172,10 @@ class CodexHandler {
         if (merged.next === state.accumulatedText)
             return;
         state.accumulatedText = merged.next;
+        if (!config_1.CONFIG.STREAM_CHAT_CHUNKS) {
+            this.clientTurnStates.set(clientId, state);
+            return;
+        }
         state.hasChunks = true;
         this.clientTurnStates.set(clientId, state);
         this.wsServer.send(JSON.stringify({
@@ -1200,6 +1208,10 @@ class CodexHandler {
         if (merged.next === state.accumulatedText)
             return;
         state.accumulatedText = merged.next;
+        if (!config_1.CONFIG.STREAM_CHAT_CHUNKS) {
+            this.clientTurnStates.set(clientId, state);
+            return;
+        }
         state.hasChunks = true;
         this.clientTurnStates.set(clientId, state);
         this.wsServer.send(JSON.stringify({
@@ -1241,7 +1253,7 @@ class CodexHandler {
             else if (!canPromoteCompleted) {
                 this.log(`[CODEX] ignored non-replace turn/completed text to avoid duplication (currentLen=${state.accumulatedText.length}, completedLen=${completedText.length})`);
             }
-            if (state.hasChunks && canPromoteCompleted) {
+            if (config_1.CONFIG.STREAM_CHAT_CHUNKS && state.hasChunks && canPromoteCompleted) {
                 this.wsServer.send(JSON.stringify({
                     type: "chat_response_chunk",
                     text: state.accumulatedText,
@@ -1263,7 +1275,8 @@ class CodexHandler {
         else {
             this.log(`[CODEX] final chat_response empty; accumulatedLen=${state.accumulatedText.length}`);
         }
-        if (finalText && !state.hasChunks) {
+        const streamedChunks = config_1.CONFIG.STREAM_CHAT_CHUNKS && state.hasChunks;
+        if (finalText && !streamedChunks) {
             this.wsServer.send(JSON.stringify({
                 type: "chat_response",
                 text: finalText,
@@ -1275,10 +1288,10 @@ class CodexHandler {
                 traceId: state.traceId || undefined,
             }));
         }
-        else if (finalText && state.hasChunks) {
+        else if (finalText && streamedChunks) {
             this.log(`[CODEX] skip final chat_response because stream chunks were already emitted (len=${finalText.length})`);
         }
-        if (state.hasChunks) {
+        if (streamedChunks) {
             this.wsServer.send(JSON.stringify({
                 type: "chat_response_complete",
                 timestamp: new Date().toISOString(),

@@ -36,6 +36,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
+const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
 const websocket_server_1 = require("./websocket-server");
 const command_handler_1 = require("./command-handler");
 const command_router_1 = require("./command-router");
@@ -49,6 +51,7 @@ let statusBarManager = null;
 let relayClient = null;
 let outputChannel;
 let extensionDisplayVersion = "unknown";
+let extensionBuildInfo = "unknown";
 /** 연결 정보 Webview 패널 (열려 있을 때만 갱신용) */
 let connectionsPanel = null;
 /** 패널 열린 동안 주기 갱신 타이머 (dispose 시 해제) */
@@ -57,7 +60,7 @@ let connectionsPanelRefreshInterval = null;
 let lastRelayStoreLabel = null;
 /** 연결 정보 Webview용 HTML 생성 */
 function getConnectionsViewHtml(data) {
-    const { serverRunning, serverPort, relaySessionId, relayStoreLabel, relayServerUrl, localClientIds, codexCliStatus, extensionVersion, } = data;
+    const { serverRunning, serverPort, relaySessionId, relayStoreLabel, relayServerUrl, localClientIds, codexCliStatus, extensionVersion, extensionBuildInfo, } = data;
     const relayStoreLine = relayStoreLabel != null
         ? `<p class="relay-meta"><strong>저장소:</strong> ${escapeHtml(relayStoreLabel)}</p>`
         : "";
@@ -165,7 +168,7 @@ function getConnectionsViewHtml(data) {
   <h1>Codex Remote - 연결 정보</h1>
   <section class="section">
     <h2>ℹ️ 버전</h2>
-    <p class="relay-meta"><strong>확장:</strong> <code>${escapeHtml(extensionVersion)}</code></p>
+    <p class="relay-meta"><strong>확장:</strong> <code>${escapeHtml(extensionVersion)}</code> · <strong>빌드:</strong> <code>${escapeHtml(extensionBuildInfo)}</code></p>
   </section>
   <section class="section">
     <h2>🔌 서버</h2>
@@ -198,6 +201,20 @@ function escapeHtml(s) {
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
+}
+function formatBuildTimestamp(date) {
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+function resolveExtensionBuildInfo(context) {
+    try {
+        const extensionJsPath = path.join(context.extension.extensionPath, "out", "extension.js");
+        const stat = fs.statSync(extensionJsPath);
+        return formatBuildTimestamp(stat.mtime);
+    }
+    catch {
+        return "unknown";
+    }
 }
 function getRelayServerUrl() {
     const configured = vscode.workspace
@@ -243,6 +260,7 @@ function updateConnectionsView() {
         localClientIds,
         codexCliStatus: getCurrentCodexCliStatus(),
         extensionVersion: extensionDisplayVersion,
+        extensionBuildInfo,
         iosAppStoreUrl: getStoreUrlSetting("iosAppStoreUrl"),
         androidPlayStoreUrl: getStoreUrlSetting("androidPlayStoreUrl"),
     });
@@ -250,6 +268,7 @@ function updateConnectionsView() {
 async function activate(context) {
     extensionDisplayVersion =
         context.extension.packageJSON?.version ?? "unknown";
+    extensionBuildInfo = resolveExtensionBuildInfo(context);
     // Output channel creation
     outputChannel = vscode.window.createOutputChannel("Codex Remote");
     context.subscriptions.push(outputChannel);
@@ -360,6 +379,23 @@ async function activate(context) {
         }
         else {
             outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] Client disconnected`);
+            if (relayClient && relayClient.isConnectedToSession()) {
+                relayClient
+                    .disconnectCurrentSession()
+                    .then((result) => {
+                    if (!result.success && result.error) {
+                        outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] [Relay] ⚠️ 자동 연결 해제 실패: ${result.error}`);
+                    }
+                    if (statusBarManager) {
+                        statusBarManager.refresh();
+                    }
+                    updateConnectionsView();
+                })
+                    .catch((error) => {
+                    const errorMsg = error instanceof Error ? error.message : String(error);
+                    outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] [Relay] ⚠️ 자동 연결 해제 오류: ${errorMsg}`);
+                });
+            }
             // 연결 상태 전송
             if (wsServer) {
                 wsServer.sendConnectionStatus();
@@ -470,7 +506,13 @@ async function activate(context) {
             vscode.window.showInformationMessage("Codex Remote server is already running");
         }
     });
-    const stopCommand = vscode.commands.registerCommand("codexRemote.stop", () => {
+    const stopCommand = vscode.commands.registerCommand("codexRemote.stop", async () => {
+        if (relayClient && relayClient.isConnectedToSession()) {
+            await relayClient.disconnectCurrentSession();
+            if (statusBarManager) {
+                statusBarManager.refresh();
+            }
+        }
         if (wsServer && wsServer.isRunning()) {
             wsServer.stop();
             if (statusBarManager) {
@@ -483,9 +525,15 @@ async function activate(context) {
             vscode.window.showInformationMessage("Codex Remote server is not running");
         }
     });
-    const toggleCommand = vscode.commands.registerCommand("codexRemote.toggle", () => {
+    const toggleCommand = vscode.commands.registerCommand("codexRemote.toggle", async () => {
         if (wsServer) {
             if (wsServer.isRunning()) {
+                if (relayClient && relayClient.isConnectedToSession()) {
+                    await relayClient.disconnectCurrentSession();
+                    if (statusBarManager) {
+                        statusBarManager.refresh();
+                    }
+                }
                 wsServer.stop();
                 if (statusBarManager) {
                     statusBarManager.update(false);
@@ -622,6 +670,7 @@ async function activate(context) {
             localClientIds,
             codexCliStatus: getCurrentCodexCliStatus(),
             extensionVersion: extensionDisplayVersion,
+            extensionBuildInfo,
             iosAppStoreUrl: getStoreUrlSetting("iosAppStoreUrl"),
             androidPlayStoreUrl: getStoreUrlSetting("androidPlayStoreUrl"),
         });

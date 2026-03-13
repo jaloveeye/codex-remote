@@ -46,6 +46,19 @@ class WebSocketServer {
         this.clients = new Set();
         this.outputChannel = null;
         this.relayClient = null;
+        this.relayForwardTypeAllowlist = new Set([
+            "chat_response",
+            "chat_response_chunk",
+            "chat_response_complete",
+            "error",
+            "command_result",
+            "codex_server_request",
+            "codex_server_request_status",
+            "agent_mode_selected",
+            "user_message",
+            "gemini_response",
+            "terminal_output",
+        ]);
         this.port = port;
         this.outputChannel = outputChannel || null;
     }
@@ -94,8 +107,11 @@ class WebSocketServer {
                 }
             });
         }
-        // 릴레이 서버에도 전송 (연결되어 있는 경우)
-        if (this.relayClient && this.relayClient.isConnectedToSession()) {
+        // 릴레이 전송 큐를 보호하기 위해 로그는 기본적으로 PC 로컬에만 유지한다.
+        // 단, 에러 로그는 원격 진단을 위해 relay로도 전송한다.
+        if (logData.level === "error" &&
+            this.relayClient &&
+            this.relayClient.isConnectedToSession()) {
             this.relayClient.sendMessage(logMessage).catch(() => {
                 // 로그 전송 실패는 무시 (무한 루프 방지)
             });
@@ -326,6 +342,11 @@ class WebSocketServer {
                 const parsed = JSON.parse(message);
                 // Only forward if message is not from relay
                 if (parsed.source !== "relay") {
+                    const messageType = typeof parsed.type === "string" ? parsed.type : "";
+                    if (messageType &&
+                        !this.relayForwardTypeAllowlist.has(messageType)) {
+                        return;
+                    }
                     if (parsed.type === "chat_response") {
                         this.log(`Forwarding chat_response to relay (text length: ${(parsed.text || "").length})`);
                     }
@@ -362,9 +383,21 @@ class WebSocketServer {
         }
         // Also send to relay server (including log messages)
         if (this.relayClient && this.relayClient.isConnectedToSession()) {
-            this.relayClient.sendMessage(message).catch(() => {
-                // Ignore errors for broadcast (to prevent infinite loops)
-            });
+            try {
+                const parsed = JSON.parse(message);
+                if (parsed.source === "relay")
+                    return;
+                const messageType = typeof parsed.type === "string" ? parsed.type : "";
+                if (messageType && !this.relayForwardTypeAllowlist.has(messageType)) {
+                    return;
+                }
+                this.relayClient.sendMessage(message).catch(() => {
+                    // Ignore errors for broadcast (to prevent infinite loops)
+                });
+            }
+            catch {
+                // non-json broadcast는 relay로 전달하지 않음
+            }
         }
     }
     // HTTP POST 요청으로 메시지 수신 (hook에서 사용)

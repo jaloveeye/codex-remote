@@ -326,6 +326,13 @@ export async function sendMessage(
   const client = getClient();
   const body = message as unknown as Record<string, unknown>;
   const exp = messageExpiresAt();
+  const rows: Array<{
+    session_id: string;
+    direction: "pc2device" | "pc2mobile" | "mobile2pc";
+    device_id: string | null;
+    body: Record<string, unknown>;
+    expires_at: number;
+  }> = [];
 
   if (message.to === "mobile") {
     const session = await getSession(sessionId);
@@ -334,7 +341,7 @@ export async function sendMessage(
       session.mobileDeviceIds.length > 0
     ) {
       for (const deviceId of session.mobileDeviceIds) {
-        await client.from("relay_messages").insert({
+        rows.push({
           session_id: sessionId,
           direction: "pc2device",
           device_id: deviceId,
@@ -343,7 +350,7 @@ export async function sendMessage(
         });
       }
     }
-    await client.from("relay_messages").insert({
+    rows.push({
       session_id: sessionId,
       direction: "pc2mobile",
       device_id: null,
@@ -351,7 +358,7 @@ export async function sendMessage(
       expires_at: exp,
     });
   } else {
-    await client.from("relay_messages").insert({
+    rows.push({
       session_id: sessionId,
       direction: "mobile2pc",
       device_id: null,
@@ -359,6 +366,9 @@ export async function sendMessage(
       expires_at: exp,
     });
   }
+
+  if (rows.length === 0) return;
+  await client.from("relay_messages").insert(rows);
 }
 
 export async function receiveMessages(

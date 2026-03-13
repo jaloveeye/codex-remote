@@ -1,5 +1,5 @@
 const int relayPollIntervalIdleMs = 2000;
-const int relayPollIntervalActiveMs = 500;
+const int relayPollIntervalActiveMs = 250;
 
 int relayPollIntervalMs({
   required bool waitingForResponse,
