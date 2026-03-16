@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../services/app_i18n.dart';
 import '../services/app_settings.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -66,7 +67,7 @@ class _SettingsPageState extends State<SettingsPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '앱 둘러보기 모드',
+                AppI18n.t(context, AppTextKey.demoModeStop),
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
@@ -75,7 +76,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const SizedBox(height: 4),
               Text(
-                '현재 둘러보기 모드입니다. 실제 연결 기능은 제외된 상태로 UI/기능 흐름만 확인 가능합니다.',
+                AppI18n.t(context, AppTextKey.demoModeStopSub),
                 style: TextStyle(
                   fontSize: 12,
                   color: Theme.of(context).colorScheme.onPrimaryContainer,
@@ -88,7 +89,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   onPressed: () {
                     unawaited(_exitDemoMode());
                   },
-                  child: const Text('둘러보기 나가기'),
+                  child: Text(AppI18n.t(context, AppTextKey.leaveDemo)),
                 ),
               ),
             ],
@@ -102,14 +103,15 @@ class _SettingsPageState extends State<SettingsPage> {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
       child: Card(
-        color: Theme.of(context).colorScheme.tertiaryContainer.withOpacity(0.55),
+        color:
+            Theme.of(context).colorScheme.tertiaryContainer.withOpacity(0.55),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '앱 둘러보기',
+                AppI18n.t(context, AppTextKey.demoModeStart),
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
@@ -118,7 +120,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const SizedBox(height: 4),
               Text(
-                '실제 연결 없이도 화면 흐름을 확인할 수 있는 심사 모드로 전환합니다.',
+                AppI18n.t(context, AppTextKey.demoModeStartSub),
                 style: TextStyle(
                   fontSize: 12,
                   color: Theme.of(context).colorScheme.onTertiaryContainer,
@@ -131,7 +133,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   onPressed: () {
                     unawaited(_enterDemoMode());
                   },
-                  child: const Text('둘러보기 시작'),
+                  child: Text(AppI18n.t(context, AppTextKey.startDemo)),
                 ),
               ),
             ],
@@ -147,18 +149,16 @@ class _SettingsPageState extends State<SettingsPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('둘러보기 모드 종료'),
-        content: const Text(
-          '심사용 둘러보기 모드를 종료하고 실제 연결 화면으로 이동합니다.',
-        ),
+        title: Text(AppI18n.t(context, AppTextKey.demoModeStopDialogTitle)),
+        content: Text(AppI18n.t(context, AppTextKey.demoModeStopDialogContent)),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('취소'),
+            child: Text(AppI18n.t(context, AppTextKey.dialogCancel)),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('종료하기'),
+            child: Text(AppI18n.t(context, AppTextKey.demoModeStopButton)),
           ),
         ],
       ),
@@ -174,34 +174,101 @@ class _SettingsPageState extends State<SettingsPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('앱 둘러보기 시작'),
-        content: const Text(
-          '실제 연결 없이 화면/기능 흐름을 확인하는 둘러보기 모드로 전환합니다.',
-        ),
+        title: Text(AppI18n.t(context, AppTextKey.demoModeStartDialogTitle)),
+        content:
+            Text(AppI18n.t(context, AppTextKey.demoModeStartDialogContent)),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('취소'),
+            child: Text(AppI18n.t(context, AppTextKey.dialogCancel)),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('시작'),
+            child: Text(AppI18n.t(context, AppTextKey.demoModeStartButton)),
           ),
         ],
       ),
     );
 
     if (confirmed != true || !mounted) return;
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
     await widget.onEnterDemoMode!();
+  }
+
+  String _languageSubLabel() {
+    return AppI18n.t(context, AppTextKey.languageSub);
+  }
+
+  String _languageTitle() {
+    return AppI18n.t(context, AppTextKey.language);
+  }
+
+  Widget _buildLanguageTile(BuildContext context) {
+    return ListTile(
+      leading: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Icon(
+          Icons.translate,
+          color: Theme.of(context).colorScheme.onSecondaryContainer,
+          size: 20,
+        ),
+      ),
+      title: Text(_languageTitle()),
+      subtitle: Text(_languageSubLabel()),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _showLanguageDialog(context),
+    );
+  }
+
+  void _showLanguageDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(AppI18n.t(context, AppTextKey.languageSelectTitle)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: AppLanguageSetting.values.map((language) {
+            return RadioListTile<AppLanguageSetting>(
+              title: Text(_languageName(language)),
+              value: language,
+              groupValue: _settings.appLanguage,
+              onChanged: (value) {
+                if (value != null) {
+                  _settings.setAppLanguage(value);
+                  Navigator.of(context).pop();
+                }
+              },
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  String _languageName(AppLanguageSetting language) {
+    switch (language) {
+      case AppLanguageSetting.system:
+        return AppI18n.t(context, AppTextKey.languageSystem);
+      case AppLanguageSetting.korean:
+        return AppI18n.t(context, AppTextKey.languageKorean);
+      case AppLanguageSetting.english:
+        return AppI18n.t(context, AppTextKey.languageEnglish);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          '설정',
-          style: TextStyle(fontWeight: FontWeight.w600),
+        title: Text(
+          AppI18n.t(context, AppTextKey.settings),
+          style: const TextStyle(fontWeight: FontWeight.w600),
         ),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
@@ -211,7 +278,7 @@ class _SettingsPageState extends State<SettingsPage> {
           if (_isDemoMode)
             IconButton(
               icon: const Icon(Icons.logout),
-              tooltip: '둘러보기 나가기',
+              tooltip: AppI18n.t(context, AppTextKey.demoModeTooltipStop),
               onPressed: () {
                 unawaited(_exitDemoMode());
               },
@@ -219,7 +286,7 @@ class _SettingsPageState extends State<SettingsPage> {
           if (!_isDemoMode && widget.onEnterDemoMode != null)
             IconButton(
               icon: const Icon(Icons.visibility),
-              tooltip: '둘러보기 시작',
+              tooltip: AppI18n.t(context, AppTextKey.demoModeTooltipStart),
               onPressed: () {
                 unawaited(_enterDemoMode());
               },
@@ -229,13 +296,18 @@ class _SettingsPageState extends State<SettingsPage> {
       body: ListView(
         children: [
           _buildDemoModeHint(),
-          _buildSectionHeader(context, '외관'),
+          _buildSectionHeader(
+              context, AppI18n.t(context, AppTextKey.settingsAppearance)),
           _buildThemeModeTile(context),
           const Divider(),
-          _buildSectionHeader(context, '기능'),
+          _buildSectionHeader(
+              context, AppI18n.t(context, AppTextKey.settingsFunction)),
+          _buildLanguageTile(context),
+          const Divider(),
           _buildShowHistoryTile(context),
           const Divider(),
-          _buildSectionHeader(context, '정보'),
+          _buildSectionHeader(
+              context, AppI18n.t(context, AppTextKey.settingsInfo)),
           _buildAboutTile(context),
         ],
       ),
@@ -271,7 +343,7 @@ class _SettingsPageState extends State<SettingsPage> {
           size: 20,
         ),
       ),
-      title: const Text('테마'),
+      title: Text(AppI18n.t(context, AppTextKey.theme)),
       subtitle: Text(_getThemeModeLabel(_settings.themeMode)),
       trailing: const Icon(Icons.chevron_right),
       onTap: () => _showThemeModeDialog(context),
@@ -292,11 +364,11 @@ class _SettingsPageState extends State<SettingsPage> {
   String _getThemeModeLabel(ThemeModeSetting mode) {
     switch (mode) {
       case ThemeModeSetting.light:
-        return '라이트 모드';
+        return AppI18n.t(context, AppTextKey.themeLight);
       case ThemeModeSetting.dark:
-        return '다크 모드';
+        return AppI18n.t(context, AppTextKey.themeDark);
       case ThemeModeSetting.system:
-        return '시스템 설정';
+        return AppI18n.t(context, AppTextKey.themeSystem);
     }
   }
 
@@ -304,7 +376,7 @@ class _SettingsPageState extends State<SettingsPage> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('테마 선택'),
+        title: Text(AppI18n.t(context, AppTextKey.themeSelect)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: ThemeModeSetting.values.map((mode) {
@@ -345,8 +417,8 @@ class _SettingsPageState extends State<SettingsPage> {
           size: 20,
         ),
       ),
-      title: const Text('세션 및 대화 히스토리'),
-      subtitle: const Text('메인 화면에 히스토리 섹션 표시'),
+      title: Text(AppI18n.t(context, AppTextKey.showHistoryTitle)),
+      subtitle: Text(AppI18n.t(context, AppTextKey.showHistorySub)),
       value: _settings.showHistory,
       onChanged: (value) => _settings.setShowHistory(value),
     );
@@ -366,8 +438,8 @@ class _SettingsPageState extends State<SettingsPage> {
           size: 20,
         ),
       ),
-      title: const Text('Codex Remote'),
-      subtitle: const Text('버전 0.1.6'),
+      title: Text(AppI18n.t(context, AppTextKey.aboutTitle)),
+      subtitle: Text(AppI18n.t(context, AppTextKey.appVersion)),
       onTap: () => _showAboutDialog(context),
     );
   }
@@ -375,8 +447,8 @@ class _SettingsPageState extends State<SettingsPage> {
   void _showAboutDialog(BuildContext context) {
     showAboutDialog(
       context: context,
-      applicationName: 'Codex Remote',
-      applicationVersion: '0.1.6',
+      applicationName: AppI18n.t(context, AppTextKey.aboutTitle),
+      applicationVersion: '0.2.0',
       applicationIcon: Container(
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(
@@ -389,13 +461,13 @@ class _SettingsPageState extends State<SettingsPage> {
           color: Theme.of(context).colorScheme.onPrimaryContainer,
         ),
       ),
-      children: const [
-        SizedBox(height: 16),
+      children: [
+        const SizedBox(height: 16),
         Text(
-          '모바일에서 Codex를 원격으로 제어하세요.',
+          AppI18n.t(context, AppTextKey.appVersionSub),
           textAlign: TextAlign.center,
         ),
-        SizedBox(height: 8),
+        const SizedBox(height: 8),
       ],
     );
   }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../services/app_i18n.dart';
 import 'home_shell_widgets.dart';
 
 class ApprovalsTabView extends StatelessWidget {
@@ -26,6 +27,7 @@ class ApprovalsTabView extends StatelessWidget {
     required this.onResolveCommandApproval,
     required this.onMarkRelayApprovalLater,
     required this.truncateForLog,
+    this.tracePanel,
   });
 
   final bool isConnected;
@@ -52,6 +54,7 @@ class ApprovalsTabView extends StatelessWidget {
       onResolveCommandApproval;
   final void Function(Map<String, dynamic>) onMarkRelayApprovalLater;
   final String Function(String value, {int maxLength}) truncateForLog;
+  final Widget? tracePanel;
 
   @override
   Widget build(BuildContext context) {
@@ -61,17 +64,17 @@ class ApprovalsTabView extends StatelessWidget {
         children: [
           HomeTabIntroCard(
             icon: Icons.gpp_good_outlined,
-            title: 'Approvals',
+            title: AppI18n.t(context, AppTextKey.approvalsTitle),
             subtitle: subtitle,
           ),
           const SizedBox(height: 12),
           HomeEmptyStateCard(
             icon: Icons.lock_clock_outlined,
-            title: '승인 요청을 받을 준비가 필요해요',
-            message: '릴레이 세션에 연결되면 모바일 승인 요청과 Codex 액션을 여기서 처리할 수 있어요.',
+            title: AppI18n.t(context, AppTextKey.approvalsNotReadyTitle),
+            message: AppI18n.t(context, AppTextKey.approvalsNotReadyMessage),
             action: FilledButton(
               onPressed: onOpenChat,
-              child: const Text('채팅 화면으로 이동'),
+              child: Text(AppI18n.t(context, AppTextKey.openChatScreen)),
             ),
           ),
         ],
@@ -85,10 +88,10 @@ class ApprovalsTabView extends StatelessWidget {
         children: [
           HomeTabIntroCard(
             icon: Icons.gpp_good_outlined,
-            title: 'Approvals',
+            title: AppI18n.t(context, AppTextKey.approvalsTitle),
             subtitle: subtitle,
             trailing: IconButton(
-              tooltip: '새로고침',
+              tooltip: AppI18n.t(context, AppTextKey.refreshTooltip),
               onPressed: onRefresh,
               icon: const Icon(Icons.refresh),
             ),
@@ -98,7 +101,8 @@ class ApprovalsTabView extends StatelessWidget {
             children: [
               Expanded(
                 child: HomeMetricCard(
-                  label: 'Codex 요청',
+                  label: AppI18n.t(
+                      context, AppTextKey.approvalsCodexRequestMetric),
                   value: '${pendingCodexServerRequests.length}',
                   icon: Icons.notification_important_outlined,
                 ),
@@ -106,7 +110,8 @@ class ApprovalsTabView extends StatelessWidget {
               const SizedBox(width: 10),
               Expanded(
                 child: HomeMetricCard(
-                  label: '릴레이 승인',
+                  label: AppI18n.t(
+                      context, AppTextKey.approvalsRelayApprovalMetric),
                   value: '${pendingCommandApprovals.length}',
                   icon: Icons.approval_outlined,
                 ),
@@ -115,7 +120,7 @@ class ApprovalsTabView extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           Text(
-            '대기 중인 Codex 액션',
+            AppI18n.t(context, AppTextKey.approvalsPendingCodexSection),
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w700,
@@ -124,10 +129,12 @@ class ApprovalsTabView extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           if (pendingCodexServerRequests.isEmpty)
-            const HomeEmptyStateCard(
+            HomeEmptyStateCard(
               icon: Icons.task_alt_outlined,
-              title: '대기 중인 Codex 요청이 없어요',
-              message: '명령 실행, 파일 변경, 추가 입력 요청이 오면 이곳에 표시됩니다.',
+              title:
+                  AppI18n.t(context, AppTextKey.approvalsNoPendingCodexTitle),
+              message:
+                  AppI18n.t(context, AppTextKey.approvalsNoPendingCodexMessage),
             )
           else
             ...pendingCodexServerRequests.take(10).map((request) {
@@ -183,7 +190,11 @@ class ApprovalsTabView extends StatelessWidget {
                             onPressed: isSubmitting
                                 ? null
                                 : () => onOpenCodexUserInputDialog(request),
-                            child: Text(isSubmitting ? '전송 중...' : '응답하기'),
+                            child: Text(
+                              isSubmitting
+                                  ? AppI18n.t(context, AppTextKey.sending)
+                                  : AppI18n.t(context, AppTextKey.respond),
+                            ),
                           ),
                         )
                       else
@@ -202,7 +213,11 @@ class ApprovalsTabView extends StatelessWidget {
                                     ? null
                                     : () => onSubmitCodexDecision(
                                         request, responsePayload),
-                                child: Text(isSubmitting ? '전송 중...' : label),
+                                child: Text(
+                                  isSubmitting
+                                      ? AppI18n.t(context, AppTextKey.sending)
+                                      : label,
+                                ),
                               );
                             }
                             return OutlinedButton(
@@ -210,7 +225,11 @@ class ApprovalsTabView extends StatelessWidget {
                                   ? null
                                   : () => onSubmitCodexDecision(
                                       request, responsePayload),
-                              child: Text(isSubmitting ? '전송 중...' : label),
+                              child: Text(
+                                isSubmitting
+                                    ? AppI18n.t(context, AppTextKey.sending)
+                                    : label,
+                              ),
                             );
                           }).toList(),
                         ),
@@ -221,7 +240,7 @@ class ApprovalsTabView extends StatelessWidget {
             }),
           const SizedBox(height: 8),
           Text(
-            '릴레이 승인 요청',
+            AppI18n.t(context, AppTextKey.approvalsPendingRelaySection),
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w700,
@@ -230,10 +249,12 @@ class ApprovalsTabView extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           if (pendingCommandApprovals.isEmpty)
-            const HomeEmptyStateCard(
+            HomeEmptyStateCard(
               icon: Icons.mark_email_read_outlined,
-              title: '대기 중인 승인 요청이 없어요',
-              message: '릴레이 서버를 통한 실행 승인 요청이 생기면 여기에 표시됩니다.',
+              title:
+                  AppI18n.t(context, AppTextKey.approvalsNoPendingRelayTitle),
+              message:
+                  AppI18n.t(context, AppTextKey.approvalsNoPendingRelayMessage),
             )
           else
             ...pendingCommandApprovals.take(10).map((approval) {
@@ -261,7 +282,8 @@ class ApprovalsTabView extends StatelessWidget {
                       Text(commandRaw, style: const TextStyle(fontSize: 12)),
                       const SizedBox(height: 6),
                       Text(
-                        '요청자: $requestedBy · ID: $approvalId',
+                        '${AppI18n.t(context, AppTextKey.requesterLabel)}: $requestedBy · '
+                        '${AppI18n.t(context, AppTextKey.approvalIdLabel)}: $approvalId',
                         style: TextStyle(
                           fontSize: 11,
                           color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -275,16 +297,19 @@ class ApprovalsTabView extends StatelessWidget {
                           FilledButton(
                             onPressed: () =>
                                 onResolveCommandApproval(approval, 'approve'),
-                            child: const Text('허용'),
+                            child: Text(
+                                AppI18n.t(context, AppTextKey.approvalAllow)),
                           ),
                           OutlinedButton(
                             onPressed: () => onMarkRelayApprovalLater(approval),
-                            child: const Text('나중에'),
+                            child: Text(
+                                AppI18n.t(context, AppTextKey.approvalLater)),
                           ),
                           OutlinedButton(
                             onPressed: () =>
                                 onResolveCommandApproval(approval, 'reject'),
-                            child: const Text('거부'),
+                            child: Text(
+                                AppI18n.t(context, AppTextKey.approvalReject)),
                           ),
                         ],
                       ),
@@ -295,7 +320,7 @@ class ApprovalsTabView extends StatelessWidget {
             }),
           const SizedBox(height: 8),
           Text(
-            '처리 히스토리',
+            AppI18n.t(context, AppTextKey.approvalsHistorySection),
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w700,
@@ -304,10 +329,10 @@ class ApprovalsTabView extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           if (processedCommandApprovals.isEmpty)
-            const HomeEmptyStateCard(
+            HomeEmptyStateCard(
               icon: Icons.history_toggle_off_outlined,
-              title: '처리된 승인 기록이 아직 없어요',
-              message: '승인/거부한 요청은 여기에서 최근 기록으로 확인할 수 있어요.',
+              title: AppI18n.t(context, AppTextKey.approvalsNoHistoryTitle),
+              message: AppI18n.t(context, AppTextKey.approvalsNoHistoryMessage),
             )
           else
             ...processedCommandApprovals.take(12).map((item) {
@@ -319,9 +344,17 @@ class ApprovalsTabView extends StatelessWidget {
               final resolvedBy = item['resolvedBy']?.toString() ?? '-';
               final timeLabel = item['timeLabel']?.toString() ?? '-';
               final isApproved = status == 'approved';
+              final isPending = status == 'pending';
               final iconColor = isApproved
                   ? Theme.of(context).colorScheme.primary
-                  : Theme.of(context).colorScheme.error;
+                  : isPending
+                      ? Theme.of(context).colorScheme.tertiary
+                      : Theme.of(context).colorScheme.error;
+              final icon = isApproved
+                  ? Icons.check_circle_outline
+                  : isPending
+                      ? Icons.hourglass_top_rounded
+                      : Icons.block;
 
               return Card(
                 margin: const EdgeInsets.only(bottom: 10),
@@ -331,7 +364,7 @@ class ApprovalsTabView extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Icon(
-                        isApproved ? Icons.check_circle_outline : Icons.block,
+                        icon,
                         size: 20,
                         color: iconColor,
                       ),
@@ -373,6 +406,19 @@ class ApprovalsTabView extends StatelessWidget {
                 ),
               );
             }),
+          if (tracePanel != null) ...[
+            const SizedBox(height: 16),
+            Text(
+              'Trace timeline',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
+            ),
+            const SizedBox(height: 8),
+            tracePanel!,
+          ],
         ],
       ),
     );

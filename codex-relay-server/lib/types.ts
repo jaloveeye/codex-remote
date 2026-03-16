@@ -40,6 +40,80 @@ export interface ApiResponse<T = unknown> {
   timestamp: number;
 }
 
+export const TRACE_HOP_ORDER = [
+  "mobile.prompt.created",
+  "mobile.send.to_relay",
+  "relay.recv.from_mobile",
+  "relay.enqueue.to_pc",
+  "ext.poll.recv",
+  "ext.dispatch.to_codex",
+  "codex.turn.started",
+  "codex.first_chunk",
+  "codex.turn.completed",
+  "ext.send.to_relay",
+  "relay.recv.from_pc",
+  "relay.enqueue.to_mobile",
+  "mobile.poll.recv",
+  "mobile.ui.rendered",
+] as const;
+
+export type TraceHop = (typeof TRACE_HOP_ORDER)[number] | (string & {});
+export type TraceStatus = "ok" | "error" | "timeout" | "fail";
+
+export interface TraceEvent {
+  event_id: string;
+  trace_id: string;
+  session_id: string;
+  hop: TraceHop;
+  status: TraceStatus;
+  server_ts: number;
+  source_ts?: number;
+  command_id?: string | null;
+  relay_message_id?: string | null;
+  client_id?: string | null;
+  sender_device_id?: string | null;
+  target_device_id?: string | null;
+  meta?: Record<string, unknown>;
+}
+
+export interface TraceTimelineHop {
+  hop: string;
+  ts: number;
+  deltaFromPrevMs: number;
+  status: TraceStatus;
+}
+
+export interface TraceTimeline {
+  traceId: string;
+  sessionId: string | null;
+  startedAt: number;
+  endedAt: number;
+  totalMs: number;
+  hops: TraceTimelineHop[];
+  missingHops: string[];
+  slowestSegment: {
+    from: string;
+    to: string;
+    ms: number;
+  } | null;
+  errors: Array<{ hop: string; status: TraceStatus }>;
+}
+
+export interface TraceSummary {
+  traceId: string;
+  sessionId: string | null;
+  startedAt: number;
+  endedAt: number;
+  totalMs: number;
+  missingHopCount: number;
+  errorCount: number;
+  slowestSegment: {
+    from: string;
+    to: string;
+    ms: number;
+  } | null;
+}
+
 export type RiskLevel = "low" | "medium" | "high" | "critical";
 export type PolicyDecision = "allow" | "approval_required" | "deny";
 export type ApprovalStatus =
@@ -173,6 +247,9 @@ export const REDIS_KEYS = {
   // 커맨드 승인 요청 (세션별 + 개별)
   sessionApprovals: (sessionId: string) => `approvals:${sessionId}:ids`,
   commandApproval: (approvalId: string) => `approval:${approvalId}`,
+  // Trace 이벤트 (traceId 단위 + session 최근 trace 목록)
+  traceEvents: (traceId: string) => `trace:${traceId}:events`,
+  traceIdsBySession: (sessionId: string) => `trace:${sessionId}:trace-ids`,
 } as const;
 
 // TTL 설정 (초)
@@ -180,4 +257,7 @@ export const TTL = {
   session: 24 * 60 * 60, // 24시간
   message: 5 * 60, // 5분
   device: 24 * 60 * 60, // 24시간
+  trace: 7 * 24 * 60 * 60, // 7일
 } as const;
+
+export const MAX_MOBILE_DEVICE_IDS = 5;

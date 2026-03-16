@@ -27,15 +27,15 @@ Deploy this server separately from any legacy relay infrastructure.
 
 ```json
 {
-  "codexRemote.relayServerUrl": "https://relay.example.com"
+  "codexRemote.relayServerUrl": "https://codex-relay.jaloveeye.com"
 }
 ```
 
 #### Mobile app
 
 ```bash
-flutter run --dart-define=RELAY_SERVER_URL=https://relay.example.com
-flutter build web --dart-define=RELAY_SERVER_URL=https://relay.example.com
+flutter run --dart-define=RELAY_SERVER_URL=https://codex-relay.jaloveeye.com
+flutter build web --dart-define=RELAY_SERVER_URL=https://codex-relay.jaloveeye.com
 ```
 
 ### Storage backends
@@ -102,15 +102,15 @@ Codex Remote용 전용 릴레이 서버 배포 문서입니다.
 
 ```json
 {
-  "codexRemote.relayServerUrl": "https://relay.example.com"
+  "codexRemote.relayServerUrl": "https://codex-relay.jaloveeye.com"
 }
 ```
 
 #### 모바일 앱
 
 ```bash
-flutter run --dart-define=RELAY_SERVER_URL=https://relay.example.com
-flutter build web --dart-define=RELAY_SERVER_URL=https://relay.example.com
+flutter run --dart-define=RELAY_SERVER_URL=https://codex-relay.jaloveeye.com
+flutter build web --dart-define=RELAY_SERVER_URL=https://codex-relay.jaloveeye.com
 ```
 
 ### 스토리지 백엔드

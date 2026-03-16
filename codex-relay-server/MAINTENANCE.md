@@ -7,7 +7,7 @@ Manual maintenance checklist for the standalone Codex Relay Server deployment.
 ## 1. Setup
 
 ```bash
-export RELAY_URL=https://relay.example.com
+export RELAY_URL=https://codex-relay.jaloveeye.com
 ```
 
 For local development, replace it with `http://localhost:3000`.
@@ -86,7 +86,7 @@ HTTP_CODE:%{http_code}
 ## 1. 준비
 
 ```bash
-export RELAY_URL=https://relay.example.com
+export RELAY_URL=https://codex-relay.jaloveeye.com
 ```
 
 로컬 개발 중이면 `http://localhost:3000`으로 바꿔 사용하세요.

@@ -39,7 +39,7 @@ Set your relay URL in VS Code settings:
 
 ```json
 {
-  "codexRemote.relayServerUrl": "https://your-relay.example.com"
+  "codexRemote.relayServerUrl": "https://codex-relay.jaloveeye.com"
 }
 ```
 
@@ -68,7 +68,7 @@ Connected clients can request runtime capabilities and render live options for:
 - `Codex Remote: 연결 정보 보기`
 - `Codex Remote: 릴레이 연결 (상태줄 클릭 시)`
 - `Codex Remote: 릴레이 서버 상태 확인`
-- `Codex Remote: 릴레이 연결 끊기`
+- `Codex Remote: 릴레이 세션 종료`
 - `Codex Remote: 세션 ID로 릴레이 연결`
 - `Codex Remote: 릴레이 세션 ID 설정 (다음 시작 시 사용)`
 
@@ -126,7 +126,7 @@ VS Code 설정에 릴레이 URL을 지정하세요:
 
 ```json
 {
-  "codexRemote.relayServerUrl": "https://your-relay.example.com"
+  "codexRemote.relayServerUrl": "https://codex-relay.jaloveeye.com"
 }
 ```
 
@@ -155,7 +155,7 @@ VS Code 설정에 릴레이 URL을 지정하세요:
 - `Codex Remote: 연결 정보 보기`
 - `Codex Remote: 릴레이 연결 (상태줄 클릭 시)`
 - `Codex Remote: 릴레이 서버 상태 확인`
-- `Codex Remote: 릴레이 연결 끊기`
+- `Codex Remote: 릴레이 세션 종료`
 - `Codex Remote: 세션 ID로 릴레이 연결`
 - `Codex Remote: 릴레이 세션 ID 설정 (다음 시작 시 사용)`
 

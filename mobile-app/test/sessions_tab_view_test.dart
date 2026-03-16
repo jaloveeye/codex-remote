@@ -2,6 +2,7 @@ import 'package:codex_remote/models/connection_models.dart';
 import 'package:codex_remote/widgets/sessions_tab_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 void main() {
   Widget buildSessionsTab({
@@ -12,6 +13,13 @@ void main() {
     String? currentCodexSessionId,
   }) {
     return MaterialApp(
+      locale: const Locale('ko'),
+      supportedLocales: const [Locale('en'), Locale('ko')],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       home: Scaffold(
         body: SessionsTabView(
           isConnected: isConnected,
@@ -81,8 +89,8 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('세션 히스토리'), findsNothing);
-      expect(find.text('사용 가능한 세션이 없습니다'), findsNothing);
+      expect(find.text('세션'), findsOneWidget);
+      expect(find.text('최근 연결이 없어요'), findsOneWidget);
     });
   });
 }

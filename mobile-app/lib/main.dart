@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
@@ -10,17 +11,26 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models/connection_models.dart';
+import 'models/trace_timeline_models.dart';
 import 'services/app_settings.dart';
+import 'services/app_i18n.dart';
+import 'services/trace_api_service.dart';
+import 'services/streaming_text_merge.dart';
+import 'services/polling_profile.dart';
+import 'services/response_indicator.dart';
+import 'services/codex_request_history.dart';
+import 'services/trace_timeline_ui.dart';
 import 'screens/settings_page.dart';
 import 'widgets/approvals_tab_view.dart';
 import 'widgets/chat_prompt_options_bar.dart';
 import 'widgets/sessions_tab_view.dart';
 import 'widgets/settings_tab_view.dart';
+import 'widgets/trace_timeline_panel.dart';
 
 // Relay 서버 URL (빌드 시 --dart-define=RELAY_SERVER_URL=... 으로 덮어쓸 수 있음)
 const String RELAY_SERVER_URL = String.fromEnvironment(
   'RELAY_SERVER_URL',
-  defaultValue: 'https://relay.example.com',
+  defaultValue: 'https://codex-relay.jaloveeye.com',
 );
 const bool DEMO_MODE = bool.fromEnvironment(
   'DEMO_MODE',
@@ -448,6 +458,16 @@ class _MyAppState extends State<MyApp> {
       title: 'Codex Remote',
       theme: lightTheme,
       darkTheme: darkTheme,
+      locale: AppSettings().appLocale,
+      supportedLocales: const [
+        Locale('en'),
+        Locale('ko'),
+      ],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+      ],
       themeMode: AppSettings().themeModeValue,
       home: _isBootstrapping
           ? const SplashLaunchPage()
@@ -515,7 +535,7 @@ class SplashLaunchPage extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              '연결 준비 중...',
+              AppI18n.t(context, AppTextKey.connectionReadyText),
               style: TextStyle(
                 fontSize: 13,
                 color: scheme.onSurfaceVariant,
@@ -559,7 +579,7 @@ class OnboardingPage extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Codex Remote 시작하기',
+                AppI18n.t(context, AppTextKey.onboardingTitle),
                 style: TextStyle(
                   fontSize: 28,
                   fontWeight: FontWeight.w800,
@@ -568,7 +588,7 @@ class OnboardingPage extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               Text(
-                '모바일에서 승인 요청과 세션 상태를 빠르게 확인하세요.',
+                AppI18n.t(context, AppTextKey.onboardingSubtitle),
                 style: TextStyle(
                   fontSize: 14,
                   height: 1.45,
@@ -578,20 +598,25 @@ class OnboardingPage extends StatelessWidget {
               const SizedBox(height: 28),
               _OnboardingFeatureTile(
                 icon: Icons.hub_outlined,
-                title: '빠른 연결',
-                description: '로컬/릴레이 연결을 설정하고 Codex 세션에 즉시 접속',
+                title:
+                    AppI18n.t(context, AppTextKey.onboardingFeatureConnection),
+                description: AppI18n.t(
+                    context, AppTextKey.onboardingFeatureConnectionDesc),
               ),
               const SizedBox(height: 12),
               _OnboardingFeatureTile(
                 icon: Icons.gpp_good_outlined,
-                title: '모바일 승인',
-                description: '승인 요청 도착 시 앱에서 바로 확인하고 처리',
+                title:
+                    AppI18n.t(context, AppTextKey.onboardingFeatureApprovals),
+                description: AppI18n.t(
+                    context, AppTextKey.onboardingFeatureApprovalsDesc),
               ),
               const SizedBox(height: 12),
               _OnboardingFeatureTile(
                 icon: Icons.chat_bubble_outline,
-                title: '대화 이어가기',
-                description: 'Chat 탭에서 프롬프트/응답 흐름을 간결하게 관리',
+                title: AppI18n.t(context, AppTextKey.onboardingFeatureChat),
+                description:
+                    AppI18n.t(context, AppTextKey.onboardingFeatureChatDesc),
               ),
               const Spacer(),
               SizedBox(
@@ -600,7 +625,8 @@ class OnboardingPage extends StatelessWidget {
                   onPressed: () {
                     unawaited(onContinue());
                   },
-                  child: const Text('시작하기'),
+                  child: Text(
+                      AppI18n.t(context, AppTextKey.onboardingStartButton)),
                 ),
               ),
               const SizedBox(height: 10),
@@ -610,7 +636,8 @@ class OnboardingPage extends StatelessWidget {
                   onPressed: () {
                     unawaited(onEnterDemoMode());
                   },
-                  child: const Text('앱 둘러보기'),
+                  child:
+                      Text(AppI18n.t(context, AppTextKey.onboardingDemoButton)),
                 ),
               ),
             ],
@@ -822,10 +849,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Timer? _capabilitiesStageTimer;
   Timer? _capabilitiesFollowupTimer;
   bool _isRelayPollInFlight = false;
+  int _lastRelayPollStartedAtMs = 0;
+  int _traceIdSequence = 0;
+  static const Duration _pollSchedulerTick = Duration(milliseconds: 250);
 
   // 스트리밍 관련
   int? _streamingMessageIndex; // 현재 스트리밍 중인 메시지의 인덱스
   String _streamingText = ''; // 스트리밍 중인 텍스트
+  final Map<String, int> _recentCompletedTraceIds = <String, int>{};
 
   // 세션 및 대화 히스토리
   Map<String, dynamic>? _sessionInfo; // 현재 세션 정보
@@ -833,6 +864,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   List<String> _availableSessions = []; // 사용 가능한 세션 목록
   List<Map<String, dynamic>> _pendingCommandApprovals = [];
   List<Map<String, dynamic>> _pendingCodexServerRequests = [];
+  List<Map<String, dynamic>> _codexRequestHistory = [];
   List<Map<String, dynamic>> _recentCommandEvents = [];
   final Map<String, Map<String, dynamic>> _resolvedApprovalEventFallbacks = {};
   final Set<String> _seenCommandApprovalIds = <String>{};
@@ -842,6 +874,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final Map<String, Timer> _autoDecisionTimers = <String, Timer>{};
   bool _loadingCommandApprovals = false;
   bool _loadingCommandEvents = false;
+  bool _loadingTraceTimeline = false;
+  bool _traceAutoRefresh = false;
+  String? _traceTimelineError;
+  TraceTimelineData? _traceTimeline;
+  List<String> _recentTraceIds = [];
+  Timer? _traceAutoRefreshTimer;
+  final TextEditingController _traceIdController = TextEditingController();
   final Set<String> _submittingCodexRequestIds = <String>{};
   DateTime? _lastCommandMetaRefreshAt;
   final FlutterLocalNotificationsPlugin _localNotificationsPlugin =
@@ -881,7 +920,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   // 런타임 옵션 관련
   String _selectedAgentMode = 'auto'; // 내부는 auto 유지
   String _selectedModel = 'auto';
-  String _selectedReasoningEffort = 'auto';
+  String _selectedReasoningEffort = 'low';
   bool _useIdeContext = false;
   bool _useFlatMode = false;
   bool _capabilitiesLoaded = false;
@@ -1020,6 +1059,237 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return queryParameters == null
         ? uri
         : uri.replace(queryParameters: queryParameters);
+  }
+
+  TraceApiService get _traceApi =>
+      TraceApiService(relayServerUrl: _effectiveRelayServerUrl);
+
+  String _newTraceId() {
+    final nowUs = DateTime.now().microsecondsSinceEpoch;
+    _traceIdSequence = (_traceIdSequence + 1) % 1000;
+    final seq = _traceIdSequence.toString().padLeft(3, '0');
+    return 'trc_${nowUs}_${_deviceId.hashCode.abs()}_$seq';
+  }
+
+  String? _extractTraceIdFromPayload(Map<String, dynamic>? payload) {
+    if (payload == null) return null;
+    final traceId = payload['traceId']?.toString().trim();
+    if (traceId != null && traceId.isNotEmpty) return traceId;
+    final fallback = payload['id']?.toString().trim();
+    if (fallback != null && fallback.isNotEmpty) return fallback;
+    return null;
+  }
+
+  void _syncTraceTimelineTargetTrace(
+    String? traceId, {
+    bool autoFetch = false,
+  }) {
+    final normalized = traceId?.trim() ?? '';
+    if (normalized.isEmpty) return;
+
+    final previousText = _traceIdController.text.trim();
+    final nextRecent =
+        prependUniqueTraceId(current: _recentTraceIds, traceId: normalized);
+    final recentChanged = nextRecent.length != _recentTraceIds.length ||
+        nextRecent.asMap().entries.any(
+              (entry) => _recentTraceIds[entry.key] != entry.value,
+            );
+
+    if (previousText != normalized ||
+        recentChanged ||
+        _traceTimelineError != null) {
+      setState(() {
+        _traceIdController.text = normalized;
+        _recentTraceIds = nextRecent;
+        _traceTimelineError = null;
+      });
+    } else if (_traceIdController.text.trim() != normalized) {
+      _traceIdController.text = normalized;
+    }
+
+    final canAutoFetch = autoFetch &&
+        _isConnected &&
+        _connectionType == ConnectionType.relay &&
+        _selectedHomeTab == HomeTab.approvals;
+    if (canAutoFetch) {
+      unawaited(_loadTraceTimeline(traceId: normalized, silent: true));
+    }
+  }
+
+  void _markTraceCompleted(String? traceId) {
+    if (traceId == null || traceId.isEmpty) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _recentCompletedTraceIds[traceId] = now;
+    _pruneCompletedTraceIds(now);
+  }
+
+  bool _isRecentlyCompletedTrace(String? traceId) {
+    if (traceId == null || traceId.isEmpty) return false;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _pruneCompletedTraceIds(now);
+    final completedAt = _recentCompletedTraceIds[traceId];
+    if (completedAt == null) return false;
+    return now - completedAt <= 30000;
+  }
+
+  void _pruneCompletedTraceIds(int nowMs) {
+    _recentCompletedTraceIds.removeWhere((_, ts) => nowMs - ts > 30000);
+  }
+
+  Future<void> _emitTraceEventsBestEffort(
+      List<Map<String, dynamic>> rawEvents) async {
+    if (_sessionId == null || rawEvents.isEmpty) return;
+    final normalizedEvents = rawEvents
+        .map((event) {
+          final traceId = event['traceId']?.toString().trim() ?? '';
+          final hop = event['hop']?.toString().trim() ?? '';
+          if (traceId.isEmpty || hop.isEmpty) return null;
+          return {
+            'traceId': traceId,
+            'sessionId': _sessionId,
+            'hop': hop,
+            'status': event['status']?.toString() ?? 'ok',
+            'commandId': event['commandId'],
+            'relayMessageId': event['relayMessageId'],
+            'senderDeviceId': event['senderDeviceId'] ?? _deviceId,
+            'targetDeviceId': event['targetDeviceId'],
+            'clientId': event['clientId'],
+            'sourceTs':
+                event['sourceTs'] ?? DateTime.now().millisecondsSinceEpoch,
+            'meta': event['meta'] is Map ? event['meta'] : <String, dynamic>{},
+          };
+        })
+        .whereType<Map<String, dynamic>>()
+        .toList();
+
+    if (normalizedEvents.isEmpty) return;
+    unawaited(_traceApi.sendTraceEvents(normalizedEvents));
+  }
+
+  Future<void> _loadRecentTraceIds({int limit = 20}) async {
+    if (!_isConnected || _sessionId == null) return;
+    try {
+      final ids =
+          await _traceApi.fetchRecentTraceIds(_sessionId!, limit: limit);
+      if (!mounted) return;
+      setState(() {
+        _recentTraceIds = ids;
+      });
+    } catch (_) {
+      // trace 조회 실패는 사용자 흐름에 영향 주지 않음
+    }
+  }
+
+  Future<void> _loadTraceTimeline(
+      {String? traceId, bool silent = false}) async {
+    final id = (traceId ?? _traceIdController.text).trim();
+    if (id.isEmpty) {
+      if (!silent && mounted) {
+        setState(() {
+          _traceTimelineError = 'Trace ID를 입력하세요.';
+        });
+      }
+      return;
+    }
+
+    if (!silent && mounted) {
+      setState(() {
+        _loadingTraceTimeline = true;
+        _traceTimelineError = null;
+      });
+    }
+
+    try {
+      final timeline = await _traceApi.fetchTimeline(id);
+      if (!mounted) return;
+      setState(() {
+        _traceTimeline = timeline;
+        _traceIdController.text = timeline.traceId;
+        _loadingTraceTimeline = false;
+        _traceTimelineError = null;
+      });
+      unawaited(_loadRecentTraceIds());
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loadingTraceTimeline = false;
+        _traceTimelineError = 'Trace 조회 실패: $e';
+      });
+    }
+  }
+
+  void _setTraceAutoRefresh(bool enabled) {
+    _traceAutoRefreshTimer?.cancel();
+    _traceAutoRefreshTimer = null;
+    final canEnable = _isConnected &&
+        _connectionType == ConnectionType.relay &&
+        _selectedHomeTab == HomeTab.approvals;
+    _traceAutoRefresh = enabled && canEnable;
+    if (!_traceAutoRefresh) return;
+    _traceAutoRefreshTimer =
+        Timer.periodic(const Duration(seconds: 5), (_) async {
+      if (!_traceAutoRefresh || !mounted) return;
+      if (!_isConnected || _connectionType != ConnectionType.relay) return;
+      if (_selectedHomeTab != HomeTab.approvals) return;
+      await _loadTraceTimeline(silent: true);
+    });
+  }
+
+  Future<void> _copyTraceTimelineReport() async {
+    final timeline = _traceTimeline;
+    if (timeline == null) return;
+    await Clipboard.setData(ClipboardData(text: timeline.toReportText()));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Trace report copied')),
+    );
+  }
+
+  bool get _isStreamingResponseActive =>
+      _isWaitingForResponse && _streamingMessageIndex != null;
+
+  bool get _isApprovalPendingForPrompt =>
+      !_isWaitingForResponse &&
+      (_pendingCommandApprovals.isNotEmpty ||
+          _pendingCodexServerRequests.isNotEmpty);
+
+  ResponseIndicatorState get _responseIndicatorState =>
+      resolveResponseIndicatorState(
+        waitingForResponse: _isWaitingForResponse,
+        streamingResponse: _isStreamingResponseActive,
+        approvalPending: _isApprovalPendingForPrompt,
+      );
+
+  int get _currentRelayPollIntervalMs => relayPollIntervalMs(
+        waitingForResponse: _isWaitingForResponse,
+        streamingResponse: _isStreamingResponseActive,
+        hasPendingRelayApprovals: _pendingCommandApprovals.isNotEmpty,
+        hasPendingCodexRequests: _pendingCodexServerRequests.isNotEmpty,
+      );
+
+  void _recordCodexRequestHistory({
+    required String requestId,
+    required String status,
+    required String title,
+    required String summary,
+    String requestKind = 'codex',
+    String resolvedBy = '-',
+    int? timestampMs,
+  }) {
+    if (requestId.trim().isEmpty) return;
+    final entry = buildCodexRequestHistoryEntry(
+      requestId: requestId,
+      status: status,
+      title: title,
+      summary: summary,
+      requestKind: requestKind,
+      resolvedBy: resolvedBy,
+      timestampMs: timestampMs,
+    );
+    _codexRequestHistory = upsertCodexRequestHistory(
+      current: _codexRequestHistory,
+      entry: entry,
+    );
   }
 
   // 새 세션 생성 (릴레이 서버 연결 시에만 사용)
@@ -1465,14 +1735,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         var isSubmitting = false;
         return StatefulBuilder(
           builder: (ctx, setDialogState) => AlertDialog(
-            title: const Text('PIN 입력'),
+            title: Text(AppI18n.t(context, AppTextKey.pinDialogTitle)),
             content: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    '이 세션은 PC에서 PIN 보호가 설정되어 있습니다.\nPC에서 설정한 4~6자리 숫자 PIN을 입력하세요.',
+                  Text(
+                    AppI18n.t(context, AppTextKey.pinDialogDescription),
                     style: TextStyle(fontSize: 14),
                   ),
                   const SizedBox(height: 16),
@@ -1495,9 +1765,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     inputFormatters: [
                       FilteringTextInputFormatter.digitsOnly,
                     ],
-                    decoration: const InputDecoration(
-                      labelText: 'PIN',
-                      hintText: '4~6자리 숫자',
+                    decoration: InputDecoration(
+                      labelText:
+                          AppI18n.t(context, AppTextKey.pinDialogInputLabel),
+                      hintText:
+                          AppI18n.t(context, AppTextKey.pinDialogInputHint),
                       counterText: '',
                       border: OutlineInputBorder(),
                     ),
@@ -1508,7 +1780,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             actions: [
               TextButton(
                 onPressed: isSubmitting ? null : () => navigator.pop(null),
-                child: const Text('취소'),
+                child: Text(AppI18n.t(context, AppTextKey.dialogCancel)),
               ),
               FilledButton.icon(
                 onPressed: isSubmitting
@@ -1528,7 +1800,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.check),
-                label: Text(isSubmitting ? '확인 중...' : '확인'),
+                label: Text(
+                  isSubmitting
+                      ? AppI18n.t(context, AppTextKey.pinDialogConfirming)
+                      : AppI18n.t(context, AppTextKey.pinDialogConfirm),
+                ),
               ),
             ],
           ),
@@ -1588,9 +1864,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final errorMessage = dataMap['error']?.toString() ?? '';
 
       if (response.statusCode == 200 && dataMap['success'] == true) {
+        _setTraceAutoRefresh(false);
         setState(() {
           _sessionId = sessionId;
           _isConnected = true;
+          _isWaitingForResponse = false;
+          _streamingMessageIndex = null;
+          _streamingText = '';
           _isReconnecting = false;
           _reconnectAttempts = 0;
           _lastConnectionError = null;
@@ -1605,6 +1885,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           _supportsFlatMode = false;
           _useIdeContext = false;
           _useFlatMode = false;
+          _traceTimeline = null;
+          _traceTimelineError = null;
+          _recentTraceIds = [];
+          _loadingTraceTimeline = false;
+          _traceIdController.clear();
           _cancelCapabilitiesSequenceTimers();
           _stopReconnect();
           _messages.add(MessageItem('✅ Connected to session $sessionId',
@@ -1642,6 +1927,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         Future.delayed(const Duration(milliseconds: 300), () {
           _loadCommandApprovals(silent: true);
           _loadCommandEvents(silent: true);
+          unawaited(_loadRecentTraceIds());
         });
         Future.delayed(const Duration(milliseconds: 200), () {
           _loadRuntimeCapabilities();
@@ -1653,41 +1939,48 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         // PC가 PIN을 설정한 세션 → PIN 입력 후 재시도
         if (!mounted) return;
         setState(() {
-          _connectionActionLabel = 'PIN 입력 대기 중...';
-          _messages.add(MessageItem('이 세션은 PIN이 필요합니다. PIN을 입력하세요.',
-              type: MessageType.system));
+          _connectionActionLabel =
+              AppI18n.t(context, AppTextKey.connectionActionPendingPin);
+          _messages.add(MessageItem(
+            AppI18n.t(context, AppTextKey.pinDialogDescription),
+            type: MessageType.system,
+          ));
         });
         final enteredPin = await _showPinDialog();
         if (!mounted) return;
         if (enteredPin != null && enteredPin.isNotEmpty) {
-          setState(() => _connectionActionLabel = 'PIN 확인 후 연결 중...');
+          setState(() => _connectionActionLabel =
+              AppI18n.t(context, AppTextKey.connectionActionConnectingWithPin));
           await _connectToSession(sessionId, enteredPin);
         } else {
           setState(() {
             _connectionActionLabel = null;
-            _messages.add(MessageItem('PIN을 입력하지 않아 연결하지 않았습니다.',
-                type: MessageType.system));
+            _messages.add(MessageItem(
+              AppI18n.t(context, AppTextKey.connectionActionPinRejected),
+              type: MessageType.system,
+            ));
           });
         }
       } else if (response.statusCode == 403 &&
           (errorCode == 'INVALID_PIN' ||
               errorMessage.toLowerCase().contains('invalid pin'))) {
         setState(() {
-          _messages.add(MessageItem('❌ PIN이 올바르지 않습니다. PC에서 설정한 PIN을 확인하세요.',
+          _messages.add(MessageItem(
+              '❌ ${AppI18n.t(context, AppTextKey.pinDialogInvalidMessage)}',
               type: MessageType.system));
         });
         if (mounted) {
           await showDialog<void>(
             context: context,
             builder: (ctx) => AlertDialog(
-              title: const Text('PIN 오류'),
-              content: const Text(
-                'PIN이 올바르지 않습니다.\nPC(익스텐션)에서 설정한 4~6자리 PIN을 확인하세요.',
+              title: Text(AppI18n.t(context, AppTextKey.pinDialogErrorTitle)),
+              content: Text(
+                AppI18n.t(context, AppTextKey.pinDialogErrorMessage),
               ),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(ctx).pop(),
-                  child: const Text('확인'),
+                  child: Text(AppI18n.t(context, AppTextKey.dialogCancel)),
                 ),
               ],
             ),
@@ -1737,15 +2030,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     setState(() {
       _isConnectionActionInProgress = true;
       _connectionActionLabel = _connectionType == ConnectionType.local
-          ? '로컬 서버 연결 준비 중...'
-          : '릴레이 세션 연결 준비 중...';
+          ? AppI18n.t(context, AppTextKey.connectionActionLocalPreparing)
+          : AppI18n.t(context, AppTextKey.connectionActionRelayPreparing);
       _lastConnectionError = null;
     });
 
     if (_connectionType == ConnectionType.local) {
       // 로컬 서버 연결
       try {
-        setState(() => _connectionActionLabel = '로컬 서버 연결 요청 중...');
+        setState(() => _connectionActionLabel =
+            AppI18n.t(context, AppTextKey.connectionActionLocalConnecting));
         await _connectToLocal();
       } finally {
         if (mounted) {
@@ -1754,7 +2048,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             if (_isConnected || _isReconnecting) {
               _connectionActionLabel = null;
             } else {
-              _connectionActionLabel = '연결 요청이 완료되지 않았습니다.';
+              _connectionActionLabel =
+                  AppI18n.t(context, AppTextKey.connectionActionNotCompleted);
             }
           });
         }
@@ -1780,7 +2075,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         return;
       }
       try {
-        setState(() => _connectionActionLabel = '릴레이 세션 연결 요청 중...');
+        setState(() => _connectionActionLabel =
+            AppI18n.t(context, AppTextKey.connectionActionRelayConnecting));
         await _connectToSession(sessionId);
       } finally {
         if (mounted) {
@@ -1789,7 +2085,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             if (_isConnected || _isReconnecting) {
               _connectionActionLabel = null;
             } else {
-              _connectionActionLabel = '연결 요청이 완료되지 않았습니다.';
+              _connectionActionLabel =
+                  AppI18n.t(context, AppTextKey.connectionActionNotCompleted);
             }
           });
         }
@@ -1824,7 +2121,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (_isDemoMode) return;
     _stopPolling(); // 기존 타이머 정지
 
-    _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+    _pollTimer = Timer.periodic(_pollSchedulerTick, (_) async {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (now - _lastRelayPollStartedAtMs < _currentRelayPollIntervalMs) {
+        return;
+      }
+      _lastRelayPollStartedAtMs = now;
       await _pollRelayMessagesOnce();
     });
   }
@@ -1847,8 +2149,36 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         final data = jsonDecode(response.body);
         if (data['success'] == true && data['data']['messages'] != null) {
           final messages = data['data']['messages'] as List;
+          final traceEvents = <Map<String, dynamic>>[];
           for (final msg in messages) {
+            final msgMap = msg is Map
+                ? Map<String, dynamic>.from(msg as Map<dynamic, dynamic>)
+                : <String, dynamic>{};
+            final payload = msgMap['data'] is Map
+                ? Map<String, dynamic>.from(
+                    msgMap['data'] as Map<dynamic, dynamic>)
+                : msgMap;
+            final traceId = _extractTraceIdFromPayload(payload);
+            if (traceId != null) {
+              traceEvents.add({
+                'traceId': traceId,
+                'hop': 'mobile.poll.recv',
+                'status': 'ok',
+                'commandId': payload['id']?.toString(),
+                'relayMessageId': msgMap['id']?.toString(),
+                'senderDeviceId': payload['senderDeviceId']?.toString(),
+                'targetDeviceId': payload['targetDeviceId']?.toString(),
+                'clientId': payload['clientId']?.toString(),
+                'sourceTs': DateTime.now().millisecondsSinceEpoch,
+                'meta': {
+                  'messageType': payload['type']?.toString() ?? msgMap['type'],
+                },
+              });
+            }
             _handleRelayMessage(msg);
+          }
+          if (traceEvents.isNotEmpty) {
+            unawaited(_emitTraceEventsBestEffort(traceEvents));
           }
         }
         unawaited(_refreshCommandMetaIfStale());
@@ -1864,6 +2194,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _pollTimer?.cancel();
     _pollTimer = null;
     _isRelayPollInFlight = false;
+    _lastRelayPollStartedAtMs = 0;
   }
 
   // relay 서버에서 받은 메시지 처리
@@ -1872,6 +2203,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     final type = msg['type'] ?? msg['data']?['type'];
     final messageData = msg['data'] ?? msg;
+    Map<String, dynamic>? traceUiRenderedEvent;
+    String? traceIdForTimeline;
 
     setState(() {
       _messages.add(MessageItem('Received: ${jsonEncode(msg)}',
@@ -1988,8 +2321,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           return;
         }
 
-        final chunkText = messageData['text'] ?? '';
-        final fullText = messageData['fullText'] ?? chunkText;
+        final chunkText = messageData['text']?.toString() ?? '';
+        final fullText = messageData['fullText']?.toString() ?? chunkText;
         final isReplace = messageData['isReplace'] == true;
 
         // 세션 ID 추출 및 저장
@@ -2014,23 +2347,26 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         }
 
         setState(() {
+          final mergedText = mergeStreamingText(
+            current: _streamingText,
+            chunkText: chunkText,
+            fullText: fullText,
+            isReplace: isReplace,
+          );
+
           // 첫 번째 청크인 경우 메시지 추가
           if (_streamingMessageIndex == null) {
             _messages
                 .add(MessageItem('', type: MessageType.chatResponseDivider));
             _messages.add(MessageItem('🤖 Codex Response',
                 type: MessageType.chatResponseHeader));
-            _streamingText = isReplace ? fullText : chunkText;
+            _streamingText = mergedText;
             _messages.add(MessageItem(_streamingText,
                 type: MessageType.chatResponseChunk));
             _streamingMessageIndex = _messages.length - 1;
           } else {
             // 기존 스트리밍 메시지 업데이트
-            if (isReplace) {
-              _streamingText = fullText;
-            } else {
-              _streamingText += chunkText;
-            }
+            _streamingText = mergedText;
             // 메시지 업데이트
             if (_streamingMessageIndex! < _messages.length) {
               _messages[_streamingMessageIndex!] = MessageItem(_streamingText,
@@ -2041,7 +2377,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _scrollToBottom();
       } else if (type == 'chat_response_complete') {
         // 스트리밍 완료 처리
+        final completedTraceId = _extractTraceIdFromPayload(
+          messageData is Map
+              ? Map<String, dynamic>.from(messageData as Map<dynamic, dynamic>)
+              : null,
+        );
+        final payload = messageData is Map
+            ? Map<String, dynamic>.from(messageData as Map<dynamic, dynamic>)
+            : <String, dynamic>{};
+        traceUiRenderedEvent = buildMobileUiRenderedTraceEvent(
+          traceId: completedTraceId,
+          messageData: payload,
+          messageType: type.toString(),
+        );
+        traceIdForTimeline = completedTraceId;
         setState(() {
+          _markTraceCompleted(completedTraceId);
           if (_streamingMessageIndex != null &&
               _streamingMessageIndex! < _messages.length) {
             // 스트리밍 메시지를 일반 chat_response로 변경
@@ -2071,6 +2422,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _scrollToBottom();
       } else if (type == 'chat_response') {
         // 기존 방식 (비스트리밍 응답) - 하위 호환성
+        final responseTraceId = _extractTraceIdFromPayload(
+          messageData is Map
+              ? Map<String, dynamic>.from(messageData as Map<dynamic, dynamic>)
+              : null,
+        );
+        if (_streamingMessageIndex == null &&
+            !_isWaitingForResponse &&
+            _isRecentlyCompletedTrace(responseTraceId)) {
+          return;
+        }
+
         // 세션 ID 추출 및 저장
         if (messageData['sessionId'] != null) {
           setState(() {
@@ -2118,6 +2480,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           _messages.add(MessageItem('', type: MessageType.chatResponseDivider));
         }
         _isWaitingForResponse = false;
+        final traceId = _extractTraceIdFromPayload(
+          messageData is Map
+              ? Map<String, dynamic>.from(messageData as Map<dynamic, dynamic>)
+              : null,
+        );
+        traceUiRenderedEvent = buildMobileUiRenderedTraceEvent(
+          traceId: traceId,
+          messageData: messageData is Map
+              ? Map<String, dynamic>.from(messageData as Map<dynamic, dynamic>)
+              : <String, dynamic>{},
+          messageType: type.toString(),
+        );
+        traceIdForTimeline = traceId;
       } else if (type == 'agent_mode_selected') {
         // 자동 모드로 선택된 실제 모드 정보 (릴레이 서버 연결)
         final requestedMode = messageData['requestedMode'] ?? 'auto';
@@ -2193,6 +2568,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _recordUnhandledIncomingMessage(type.toString(), messageData, 'relay');
       }
     });
+    if (traceIdForTimeline != null && traceIdForTimeline!.isNotEmpty) {
+      _syncTraceTimelineTargetTrace(traceIdForTimeline, autoFetch: true);
+    }
+    if (traceUiRenderedEvent != null) {
+      unawaited(_emitTraceEventsBestEffort([traceUiRenderedEvent!]));
+    }
     _scrollToBottom();
   }
 
@@ -2354,18 +2735,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   String get _modelCatalogLoadingText {
     switch (_modelCatalogLoadStage) {
       case ModelCatalogLoadStage.loading:
-        return '모델 목록을 불러오는 중...';
+        return AppI18n.t(context, AppTextKey.modelCatalogLoadingLabelLoading);
       case ModelCatalogLoadStage.defaultReady:
-        return '기본 모델 로딩 성공. 전체 모델을 준비 중...';
+        return AppI18n.t(
+            context, AppTextKey.modelCatalogLoadingLabelDefaultReady);
       case ModelCatalogLoadStage.syncingAll:
-        return '이후 모든 모델을 불러오고 있습니다...';
+        return AppI18n.t(context, AppTextKey.modelCatalogLoadingLabelSyncing);
       case ModelCatalogLoadStage.delayed:
-        return '전체 모델 동기화가 지연되어 기본 모델을 사용 중입니다.';
+        return AppI18n.t(context, AppTextKey.modelCatalogLoadingLabelDelayed);
       case ModelCatalogLoadStage.failed:
-        return '모델 목록 로딩에 실패했어요. 다시 시도해 주세요.';
+        return AppI18n.t(context, AppTextKey.modelCatalogLoadingLabelFailed);
       case ModelCatalogLoadStage.completed:
       case ModelCatalogLoadStage.idle:
-        return '모델 목록을 불러오는 중...';
+        return AppI18n.t(context, AppTextKey.modelCatalogLoadingLabelLoading);
     }
   }
 
@@ -2389,11 +2771,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               : DateTime.now()
                   .difference(_runtimeCapabilitiesRequestedAt!)
                   .inSeconds;
-          _messages.add(MessageItem(
+          _messages.add(
+            MessageItem(
               elapsedSec == null
-                  ? '⚠️ 전체 모델 로딩이 지연되어 기본 모델로 먼저 사용할게요.'
-                  : '⚠️ 전체 모델 로딩이 ${elapsedSec}초 이상 지연되어 기본 모델로 먼저 사용할게요.',
-              type: MessageType.system));
+                  ? AppI18n.t(context, AppTextKey.modelCatalogSyncDelayNotice)
+                  : AppI18n.tWithParams(
+                      context,
+                      AppTextKey.modelCatalogSyncDelayNoticeWithElapsed,
+                      {'elapsed': '$elapsedSec'},
+                    ),
+              type: MessageType.system,
+            ),
+          );
         }
       });
       if (_capabilitiesFollowupAttempts < _maxCapabilitiesFollowupAttempts) {
@@ -2411,15 +2800,27 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           _getModelDisplayName(_getDefaultModelFromCapabilities());
       setState(() {
         _modelCatalogLoadStage = ModelCatalogLoadStage.defaultReady;
-        _messages.add(MessageItem('✅ 기본 모델 로딩 성공: $defaultModelLabel',
-            type: MessageType.system));
+        _messages.add(
+          MessageItem(
+            AppI18n.tWithParams(
+              context,
+              AppTextKey.modelCatalogDefaultModelLoaded,
+              {'model': defaultModelLabel},
+            ),
+            type: MessageType.system,
+          ),
+        );
       });
       _capabilitiesStageTimer = Timer(const Duration(milliseconds: 700), () {
         if (!mounted || !_capabilitiesLoading || _capabilitiesLoaded) return;
         setState(() {
           _modelCatalogLoadStage = ModelCatalogLoadStage.syncingAll;
-          _messages.add(MessageItem('🔄 이후 모든 모델을 불러오고 있습니다...',
-              type: MessageType.system));
+          _messages.add(
+            MessageItem(
+              AppI18n.t(context, AppTextKey.modelCatalogSyncingModels),
+              type: MessageType.system,
+            ),
+          );
         });
       });
     });
@@ -2554,16 +2955,33 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 .inMilliseconds;
         _messages.add(MessageItem(
           elapsedMs == null
-              ? '🔔 전체 모델 로딩 완료: ${_availableModels.length}개 '
-                  '(기본: $defaultModelLabel)'
-              : '🔔 전체 모델 로딩 완료: ${_availableModels.length}개 '
-                  '(기본: $defaultModelLabel, ${elapsedMs}ms)',
+              ? AppI18n.tWithParams(
+                  context,
+                  AppTextKey.modelCatalogAllLoaded,
+                  {
+                    'count': '${_availableModels.length}',
+                    'model': defaultModelLabel,
+                  },
+                )
+              : AppI18n.tWithParams(
+                  context,
+                  AppTextKey.modelCatalogAllLoadedWithElapsed,
+                  {
+                    'count': '${_availableModels.length}',
+                    'model': defaultModelLabel,
+                    'elapsed': '$elapsedMs',
+                  },
+                ),
           type: MessageType.system,
         ));
         if (previousModelCount > 0 &&
             previousModelCount != _availableModels.length) {
           _messages.add(MessageItem(
-              '🔁 모델 목록 갱신: $previousModelCount개 → ${_availableModels.length}개',
+              AppI18n.tWithParams(
+                  context, AppTextKey.modelCatalogListRefreshed, {
+                'previous': '$previousModelCount',
+                'next': '${_availableModels.length}',
+              }),
               type: MessageType.system));
         }
       }
@@ -2586,10 +3004,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (wasLoading && _capabilitiesFollowupAttempts == 0) {
       final defaultModelLabel =
           _getModelDisplayName(_getDefaultModelFromCapabilities());
-      _messages.add(MessageItem('✅ 기본 모델 로딩 성공: $defaultModelLabel',
-          type: MessageType.system));
       _messages.add(
-          MessageItem('🔄 이후 모든 모델을 불러오고 있습니다...', type: MessageType.system));
+        MessageItem(
+          AppI18n.tWithParams(
+            context,
+            AppTextKey.modelCatalogDefaultModelLoaded,
+            {'model': defaultModelLabel},
+          ),
+          type: MessageType.system,
+        ),
+      );
+      _messages.add(MessageItem(
+        AppI18n.t(context, AppTextKey.modelCatalogSyncingModels),
+        type: MessageType.system,
+      ));
     }
     _armCapabilitiesLoadTimeout();
     _scheduleCapabilitiesFollowupLoad();
@@ -2598,6 +3026,25 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   // 텍스트 내용을 분석하여 적절한 에이전트 모드 자동 선택 (Extension의 detectAgentMode와 동일한 로직)
   String? _detectAgentMode(String text) {
     final lowerText = text.toLowerCase();
+    final trimmed = lowerText.trim();
+
+    // 짧은 인사/잡담은 Ask 모드로 보내 불필요한 작업 지시 문맥을 줄인다.
+    const greetingKeywords = [
+      'hello',
+      'hi',
+      'hey',
+      'good morning',
+      'good afternoon',
+      'good evening',
+      '안녕',
+      '안녕하세요',
+      '반가워',
+      '반갑습니다',
+    ];
+    if (trimmed.length <= 40 &&
+        greetingKeywords.any((keyword) => trimmed.contains(keyword))) {
+      return 'ask';
+    }
 
     // Debug 모드 키워드
     const debugKeywords = [
@@ -2694,7 +3141,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (_isDemoMode) {
       if (mounted) {
         _messages.add(MessageItem(
-          '심사 모드에서는 연결 종료 버튼이 샘플 동작입니다.',
+          AppI18n.t(context, AppTextKey.demoModeDisconnectActionSampleMessage),
           type: MessageType.system,
         ));
         _scrollToBottom();
@@ -2703,6 +3150,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
 
     _stopPolling();
+    _setTraceAutoRefresh(false);
     _cancelAllAutoDecisionTimers();
     _stopReconnect(); // 재연결 중지
     _cancelCapabilitiesSequenceTimers();
@@ -2715,13 +3163,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       setState(() {
         _isConnected = false;
         _sessionId = null;
+        _isWaitingForResponse = false;
+        _streamingMessageIndex = null;
+        _streamingText = '';
         _isReconnecting = false;
         _isConnectionActionInProgress = false;
         _connectionActionLabel = null;
         _reconnectAttempts = 0;
         _pendingCommandApprovals = [];
         _pendingCodexServerRequests = [];
+        _codexRequestHistory = [];
         _recentCommandEvents = [];
+        _traceTimeline = null;
+        _traceTimelineError = null;
+        _recentTraceIds = [];
+        _loadingTraceTimeline = false;
+        _traceIdController.clear();
         _loadingCommandApprovals = false;
         _loadingCommandEvents = false;
         _lastCommandMetaRefreshAt = null;
@@ -2896,9 +3353,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ? selectedReasoningEffort
           : null;
 
+      final commandId = DateTime.now().millisecondsSinceEpoch.toString();
+      final traceId = _newTraceId();
+      _syncTraceTimelineTargetTrace(traceId);
+
       final commandData = {
+        'traceId': traceId,
         'type': type,
-        'id': DateTime.now().millisecondsSinceEpoch.toString(),
+        'id': commandId,
         'senderDeviceId': _deviceId,
         if (text != null) 'text': text,
         if (command != null) 'command': command,
@@ -2923,6 +3385,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
       // 프롬프트 전송 시 사용자 프롬프트를 별도로 기록하고 응답 대기 상태 설정
       if (prompt == true && execute == true && text != null) {
+        unawaited(_emitTraceEventsBestEffort([
+          {
+            'traceId': traceId,
+            'hop': 'mobile.prompt.created',
+            'status': 'ok',
+            'commandId': commandId,
+            'senderDeviceId': _deviceId,
+            'sourceTs': DateTime.now().millisecondsSinceEpoch,
+            'meta': {
+              'messageType': type,
+            },
+          },
+        ]));
         setState(() {
           _isWaitingForResponse = true;
           // 사용자 프롬프트를 별도 타입으로 추가 (선택된 모드와 함께)
@@ -2963,6 +3438,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         WidgetsBinding.instance.addPostFrameCallback((_) async {
           if (!mounted || _sessionId == null) return;
           try {
+            unawaited(_emitTraceEventsBestEffort([
+              {
+                'traceId': traceId,
+                'hop': 'mobile.send.to_relay',
+                'status': 'ok',
+                'commandId': commandId,
+                'senderDeviceId': _deviceId,
+                'sourceTs': DateTime.now().millisecondsSinceEpoch,
+                'meta': {
+                  'messageType': type,
+                },
+              },
+            ]));
             final response = await http.post(
               _relayUri('/api/send'),
               headers: {'Content-Type': 'application/json'},
@@ -3001,14 +3489,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       type: MessageType.system));
                   // _isWaitingForResponse는 이미 true, 유지
                 } else if (policyDecision == 'approval_required') {
-                  final needsAssistantResponse =
-                      prompt == true && execute == true;
                   _messages.add(MessageItem(
-                      needsAssistantResponse
-                          ? '⏳ 승인 필요: $approvalId (risk: $riskLevel) · 승인 후 응답을 계속 대기합니다.'
-                          : '⏳ 승인 필요: $approvalId (risk: $riskLevel)',
+                      '⏳ 승인 필요: $approvalId (risk: $riskLevel) · 승인 후 응답이 시작됩니다.',
                       type: MessageType.system));
-                  _isWaitingForResponse = needsAssistantResponse;
+                  // 승인 대기 상태에서는 "응답 대기" 인디케이터를 끄고,
+                  // 실제 승인(allow) 이후에만 다시 응답 대기로 전환한다.
+                  _isWaitingForResponse = false;
                 } else if (policyDecision == 'deny') {
                   _messages.add(MessageItem(
                       '🚫 정책 차단: ${responseData?['error'] ?? 'command denied'}',
@@ -3102,23 +3588,28 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   String _generateDemoResponseForPrompt(String promptText, [String? fallback]) {
     final lower = promptText.toLowerCase();
     if (fallback != null) {
-      return '[$fallback] 데모 모드에서는 실제 서버 전송 없이 샘플 메시지로 응답합니다.';
+      return AppI18n.tWithParams(
+        context,
+        AppTextKey.demoModeResponseFallback,
+        {'fallback': fallback},
+      );
     }
 
     if (lower.contains('심사') || lower.contains('둘러보기')) {
-      return '심사/둘러보기 모드는 실제 네트워크 연결 없이 화면 확인만 가능합니다. 핵심 기능(연결 상태/채팅/승인/세션 탭)을 검토하실 수 있습니다.';
+      return AppI18n.t(context, AppTextKey.demoModeReviewModeDescription);
     }
     if (lower.contains('세션') || lower.contains('연결')) {
-      return '현재는 리뷰 데모 모드이므로 자동으로 demo-session-id로 세션이 구성되어 있습니다. 릴레이/로컬 연결은 실제 연동이 필요할 때만 수행하세요.';
+      return AppI18n.t(
+          context, AppTextKey.demoModeSessionAutoConfiguredMessage);
     }
     if (lower.contains('승인') || lower.contains('결정')) {
-      return 'Approvals 탭에서 Pendings를 확인하고 승인/거부 동작을 처리할 수 있습니다. 현재는 샘플 데이터/샘플 흐름을 보여주는 모드입니다.';
+      return AppI18n.t(context, AppTextKey.demoModeApprovalGuideMessage);
     }
     if (lower.contains('예시') || lower.contains('기능')) {
-      return '예시 질문: "승인 요청은 어디서 보나요?" 또는 "모바일에서 무엇을 할 수 있나요?" 같은 안내를 통해 앱 흐름을 확인해 보세요.';
+      return AppI18n.t(context, AppTextKey.demoModeFeatureGuideMessage);
     }
 
-    return '요청하신 내용이 데모 챗으로 들어왔습니다. 현재는 실제 모델이 아닌 샘플 응답이므로 동작 예시를 보여드리기 위한 응답입니다.';
+    return AppI18n.t(context, AppTextKey.demoModeSampleAssistantStart);
   }
 
   void _scrollToBottom() {
@@ -3761,10 +4252,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     unawaited(_initializeNotifications());
     unawaited(_initializeConnectivityHandling());
     if (_isDemoMode) {
-      _activateDemoMode();
-      if (widget.initialTab != HomeTab.chat) {
-        unawaited(_selectHomeTab(widget.initialTab));
-      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_isDemoMode) return;
+        _activateDemoMode();
+        if (widget.initialTab != HomeTab.chat) {
+          unawaited(_selectHomeTab(widget.initialTab));
+        }
+      });
     }
   }
 
@@ -3784,6 +4278,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (widget.onEnterDemoMode == null) return;
 
     await widget.onEnterDemoMode!();
+
+    if (!mounted) return;
+
+    // 데모 모드 진입 직후에는 설정 화면에서 벗어나 채팅 탭으로 이동
+    if (_selectedHomeTab != HomeTab.chat) {
+      await _selectHomeTab(HomeTab.chat);
+    }
   }
 
   Future<void> _exitDemoMode() async {
@@ -3792,18 +4293,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('둘러보기 모드 종료'),
-        content: const Text(
-          '심사용 둘러보기 모드를 종료하고 실제 연결 중심 화면으로 이동합니다.',
-        ),
+        title: Text(AppI18n.t(context, AppTextKey.demoModePopupTitleExit)),
+        content: Text(AppI18n.t(context, AppTextKey.demoModePopupContentExit)),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('취소'),
+            child: Text(AppI18n.t(context, AppTextKey.dialogCancel)),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('종료하기'),
+            child: Text(AppI18n.t(context, AppTextKey.demoModeStopButton)),
           ),
         ],
       ),
@@ -3819,7 +4318,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
 
     return IconButton(
-      tooltip: '둘러보기 나가기',
+      tooltip: AppI18n.t(context, AppTextKey.leaveDemo),
       icon: const Icon(Icons.logout),
       onPressed: () {
         unawaited(_exitDemoMode());
@@ -3851,7 +4350,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    '앱 둘러보기 모드',
+                    AppI18n.t(context, AppTextKey.demoModeStop),
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
@@ -3862,7 +4361,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ),
               const SizedBox(height: 4),
               Text(
-                '현재 둘러보기 모드입니다. 실제 연결 없이 화면/기능 흐름만 확인할 수 있어요.',
+                AppI18n.t(context, AppTextKey.demoModeStopSub),
                 style: TextStyle(
                   fontSize: 11,
                   height: 1.35,
@@ -3876,7 +4375,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   onPressed: () {
                     unawaited(_exitDemoMode());
                   },
-                  child: const Text('둘러보기 나가기'),
+                  child: Text(AppI18n.t(context, AppTextKey.leaveDemo)),
                 ),
               ),
             ],
@@ -3973,20 +4472,29 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (_isConnected && _sessionId == 'demo-session-id') {
       return;
     }
+    final demoFirstMessage =
+        AppI18n.t(context, AppTextKey.demoModeSamplePromptStart);
+    final demoSecondMessage =
+        AppI18n.t(context, AppTextKey.demoModeSamplePromptReview);
+    final demoIntroMessage = AppI18n.t(context, AppTextKey.demoModeSampleIntro);
+    final demoSessionMessage =
+        AppI18n.t(context, AppTextKey.demoModeSampleSessionSummary);
 
     final demoHistory = <Map<String, dynamic>>[
       {
         'sessionId': 'demo-codex-session',
-        'userMessage': 'Codex Remote 앱은 어떻게 써요?',
-        'assistantResponse':
-            '세션 ID 입력 없이도 심사 모드로 바로 시연할 수 있어요.\n\n아래 입력창에서 프롬프트를 보내면 데모 응답이 표시됩니다.',
+        'userMessage': AppI18n.isEnglish(context)
+            ? 'How do I use Codex Remote?'
+            : 'Codex Remote 앱은 어떻게 써요?',
+        'assistantResponse': demoFirstMessage,
         'agentMode': 'auto',
       },
       {
         'sessionId': 'demo-codex-session',
-        'userMessage': '승인 요청은 어디서 보나요?',
-        'assistantResponse':
-            'Approvals 탭에서 Codex 요청/릴레이 승인 목록을 확인하고 반응 버튼을 눌러 응답할 수 있어요.',
+        'userMessage': AppI18n.isEnglish(context)
+            ? 'Where can I check approval requests?'
+            : '승인 요청은 어디서 보나요?',
+        'assistantResponse': demoSecondMessage,
         'agentMode': 'agent',
       },
     ];
@@ -4017,6 +4525,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _availableSessions = const ['demo-codex-session'];
       _pendingCodexServerRequests = [];
       _pendingCommandApprovals = [];
+      _codexRequestHistory = [];
       _recentCommandEvents = [];
       _loadingCommandApprovals = false;
       _loadingCommandEvents = false;
@@ -4043,16 +4552,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _selectedReasoningEffort = 'auto';
 
       _messages.clear();
+      _messages.add(MessageItem(demoIntroMessage, type: MessageType.system));
       _messages.add(MessageItem(
-        '🔎 심사/둘러보기 모드가 활성화되어 샘플 데이터로 진입했어요.',
+        demoSessionMessage,
         type: MessageType.system,
       ));
       _messages.add(MessageItem(
-        '📡 PC 세션 없이도 Chat/Approvals/Sessions/Settings 화면을 확인할 수 있습니다.',
-        type: MessageType.system,
-      ));
-      _messages.add(MessageItem(
-        '✅ 릴레이 세션: demo-session-id',
+        AppI18n.tWithParams(
+          context,
+          AppTextKey.demoModeSampleRelaySessionLine,
+          {'sessionId': 'demo-session-id'},
+        ),
         type: MessageType.system,
       ));
       _applyChatHistoryToMessages(demoHistory, replaceConversation: true);
@@ -4389,17 +4899,25 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           final ageMinutes =
               DateTime.now().difference(cached.cachedAt).inMinutes;
           _messages.add(MessageItem(
-              '📦 캐시된 모델 ${_availableModels.length}개 적용 '
-              '(약 ${ageMinutes}분 전)',
+              AppI18n.tWithParams(
+                context,
+                AppTextKey.modelCatalogCacheApplied,
+                {
+                  'count': '${_availableModels.length}',
+                  'minutes': '$ageMinutes',
+                },
+              ),
               type: MessageType.system));
-          _messages.add(
-              MessageItem('🔄 최신 모델 목록을 동기화하는 중...', type: MessageType.system));
+          _messages.add(MessageItem(
+              AppI18n.t(context, AppTextKey.modelCatalogSyncLatestLoading),
+              type: MessageType.system));
         } else {
           _capabilitiesLoaded = false;
           _capabilitiesFromCache = false;
           _modelCatalogLoadStage = ModelCatalogLoadStage.loading;
-          _messages.add(
-              MessageItem('🛰️ 모델 목록을 불러오는 중...', type: MessageType.system));
+          _messages.add(MessageItem(
+              AppI18n.t(context, AppTextKey.modelCatalogLoadFromNetwork),
+              type: MessageType.system));
         }
       });
       if (cached == null) {
@@ -4420,8 +4938,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _capabilitiesLoading = false;
         _modelCatalogLoadStage = ModelCatalogLoadStage.failed;
         _runtimeCapabilitiesRequestedAt = null;
-        _messages
-            .add(MessageItem('❌ 모델 목록 로딩 실패: $e', type: MessageType.system));
+        _messages.add(MessageItem(
+            AppI18n.tWithParams(
+              context,
+              AppTextKey.modelCatalogLoadFailed,
+              {'error': '$e'},
+            ),
+            type: MessageType.system));
       });
     }
   }
@@ -5070,11 +5593,37 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         'approvalId': approvalId,
         'resolvedBy': byLabel,
         'timeLabel': timeLabel,
+        'sortTs': (_parseTimestampValue(event['resolved_at']) ??
+                _parseTimestampValue(event['resolvedAt']) ??
+                _parseTimestampValue(event['timestamp']) ??
+                _parseTimestampValue(event['created_at']) ??
+                _parseTimestampValue(event['createdAt']) ??
+                DateTime.fromMillisecondsSinceEpoch(0))
+            .millisecondsSinceEpoch,
       });
-      if (entries.length >= limit) break;
     }
 
-    return entries;
+    for (final historyEntry in _codexRequestHistory) {
+      final item = toApprovalHistoryItem(historyEntry);
+      final dedupeKey =
+          '${item['approvalId']}_${item['status']}_${item['title']}';
+      if (seen.contains(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      entries.add(item);
+    }
+
+    entries.sort((a, b) {
+      final at = a['sortTs'] is int ? a['sortTs'] as int : 0;
+      final bt = b['sortTs'] is int ? b['sortTs'] as int : 0;
+      return bt.compareTo(at);
+    });
+
+    final sliced = entries.take(limit).map((entry) {
+      final next = Map<String, dynamic>.from(entry);
+      next.remove('sortTs');
+      return next;
+    }).toList();
+    return sliced;
   }
 
   String _describeDecisionPayload(Map<String, dynamic> responsePayload) {
@@ -5726,7 +6275,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (_isDemoMode) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('심사 모드에서는 승인 응답이 샘플 동작입니다.')),
+          SnackBar(
+            content: Text(
+              AppI18n.t(
+                  context, AppTextKey.demoModeDemoApprovalActionSampleMessage),
+            ),
+          ),
         );
       }
       return;
@@ -5842,7 +6396,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     });
     _scrollToBottom();
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('승인 요청을 나중에 처리하도록 남겨뒀어요.')),
+      SnackBar(
+        content: Text(
+          AppI18n.t(context, AppTextKey.demoModeDeferredApprovalNotice),
+        ),
+      ),
     );
   }
 
@@ -5954,7 +6512,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     border: Border.all(color: accentColor.withOpacity(0.28)),
                   ),
                   child: Text(
-                    '모바일에서 선택해야 Codex가 계속 진행됩니다.',
+                    AppI18n.t(
+                        context, AppTextKey.demoModeNeedsMobileActionNotice),
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
@@ -6069,15 +6628,27 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final requestId = payload['requestId']?.toString() ?? '';
     if (requestId.isEmpty) return;
     final isNewRequest = _seenCodexRequestIds.add(requestId);
+    final summary =
+        _truncateForLog(_codexRequestSummary(payload), maxLength: 56);
+    final requestTitle = _codexRequestTitle(payload);
+    final requestKind = payload['requestKind']?.toString() ?? 'codex';
+    final timestamp =
+        _parseTimestampValue(payload['timestamp'])?.millisecondsSinceEpoch;
 
     if (!mounted) return;
     setState(() {
       _upsertPendingCodexServerRequest(payload);
+      _recordCodexRequestHistory(
+        requestId: requestId,
+        status: 'pending',
+        title: requestTitle,
+        summary: summary,
+        requestKind: requestKind,
+        timestampMs: timestamp,
+      );
       if (isNewRequest) {
-        final summary =
-            _truncateForLog(_codexRequestSummary(payload), maxLength: 56);
         _messages.add(MessageItem(
-            '📩 ${_codexRequestTitle(payload)} 요청 도착${summary.isNotEmpty ? ' · $summary' : ''}',
+            '📩 $requestTitle 요청 도착${summary.isNotEmpty ? ' · $summary' : ''}',
             type: MessageType.system));
       }
       _isWaitingForResponse = false;
@@ -6101,6 +6672,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     setState(() {
       _removePendingCodexServerRequest(requestId);
+      _recordCodexRequestHistory(
+        requestId: requestId,
+        status: status,
+        title: _codexRequestTitle(payload),
+        summary: message.isNotEmpty ? message : _codexRequestSummary(payload),
+        requestKind: payload['requestKind']?.toString() ?? 'codex',
+        timestampMs: _parseTimestampValue(payload['timestamp'])
+                ?.millisecondsSinceEpoch ??
+            DateTime.now().millisecondsSinceEpoch,
+      );
       final statusText = message.isNotEmpty ? message : status;
       _messages.add(MessageItem(
           'ℹ️ ${_codexRequestTitle(payload)} 상태: $statusText',
@@ -6175,7 +6756,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (_isDemoMode) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('심사 모드에서는 요청 응답이 샘플 동작입니다.')),
+          SnackBar(
+            content: Text(
+              AppI18n.t(
+                  context, AppTextKey.demoModeDemoRequestActionSampleMessage),
+            ),
+          ),
         );
       }
       return;
@@ -6194,6 +6780,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (!mounted) return;
       setState(() {
         _removePendingCodexServerRequest(requestId);
+        _recordCodexRequestHistory(
+          requestId: requestId,
+          status: 'submitted',
+          title: _codexRequestTitle(request),
+          summary: decisionLabel,
+          requestKind: request['requestKind']?.toString() ?? 'codex',
+          resolvedBy: _deviceId,
+        );
         _messages.add(MessageItem(
             '✅ ${_codexRequestTitle(request)} 응답 전송됨 → $decisionLabel',
             type: MessageType.system));
@@ -6632,11 +7226,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _cancelCapabilitiesSequenceTimers();
     _connectivitySubscription?.cancel();
     _stopPolling();
+    _setTraceAutoRefresh(false);
     _localWebSocket?.sink.close();
     _commandController.dispose();
     _sessionIdController.dispose();
     _localIpController.dispose();
     _localPortController.dispose();
+    _traceIdController.dispose();
     _scrollController.dispose();
     _sessionIdFocusNode.dispose();
     _localIpFocusNode.dispose();
@@ -6664,7 +7260,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             ),
             const SizedBox(height: 16),
             Text(
-              isSearchActive ? '검색 결과가 없습니다' : '메시지가 없습니다',
+              isSearchActive
+                  ? AppI18n.t(
+                      context, AppTextKey.connectionMessageNoSearchResults)
+                  : AppI18n.t(context, AppTextKey.connectionMessageNoMessages),
               style: TextStyle(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
                 fontSize: 15,
@@ -6674,7 +7273,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             if (_messages.isEmpty) ...[
               const SizedBox(height: 8),
               Text(
-                '프롬프트를 입력하여 시작하세요',
+                AppI18n.t(context, AppTextKey.connectionMessageStartHint),
                 style: TextStyle(
                   color: Theme.of(context)
                       .colorScheme
@@ -6719,7 +7318,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 ),
                 const SizedBox(width: 12),
                 Text(
-                  '응답을 기다리는 중...',
+                  AppI18n.t(
+                    context,
+                    _responseIndicatorState == ResponseIndicatorState.receiving
+                        ? AppTextKey.messageReceiving
+                        : AppTextKey.messageWaiting,
+                  ),
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w500,
@@ -6835,7 +7439,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   maxLines: 1,
                   textInputAction: TextInputAction.send,
                   decoration: InputDecoration(
-                    hintText: '프롬프트 입력...',
+                    hintText:
+                        AppI18n.t(context, AppTextKey.chatPromptInputHint),
                     isDense: true,
                     contentPadding: const EdgeInsets.symmetric(
                         horizontal: 12, vertical: 10),
@@ -6854,7 +7459,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   unawaited(_submitPromptFromInput(newSession: false));
                 },
                 icon: const Icon(Icons.send),
-                tooltip: '전송',
+                tooltip: AppI18n.t(context, AppTextKey.chatSendTooltip),
               ),
             ],
           ),
@@ -6958,8 +7563,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                         textInputAction: TextInputAction.send,
                         decoration: InputDecoration(
                           hintText: _isWaitingForResponse
-                              ? '응답 생성 중...'
-                              : '메시지를 입력하세요',
+                              ? AppI18n.t(context,
+                                  AppTextKey.chatPromptInputHintGenerating)
+                              : AppI18n.t(
+                                  context, AppTextKey.chatPromptInputHint),
                           filled: true,
                           fillColor: Theme.of(context)
                               .colorScheme
@@ -6985,7 +7592,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                   _submitPromptFromInput(newSession: false));
                             },
                       icon: const Icon(Icons.arrow_upward),
-                      tooltip: '보내기',
+                      tooltip: AppI18n.t(context, AppTextKey.chatSendTooltip),
                     ),
                   ],
                 ),
@@ -7002,16 +7609,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final isBusy = _isReconnecting || _isConnectionActionInProgress;
     final actionLabel = _connectionActionLabel ??
         (_connectionType == ConnectionType.local
-            ? '로컬 서버 연결 요청 중...'
-            : '릴레이 세션 연결 요청 중...');
+            ? AppI18n.t(context, AppTextKey.connectionActionLocalConnecting)
+            : AppI18n.t(context, AppTextKey.connectionActionRelayConnecting));
     return Scaffold(
       appBar: AppBar(
-        title: const Text('연결'),
+        title: Text(AppI18n.t(context, AppTextKey.homeConnectionTitle)),
         actions: [
           _buildExitDemoModeButton(),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
-            tooltip: '설정',
+            tooltip: AppI18n.t(context, AppTextKey.settings),
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
@@ -7043,7 +7650,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '첫 연결을 시작해요',
+                  AppI18n.t(context, AppTextKey.connectionIntroTitle),
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w800,
@@ -7052,7 +7659,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '연결이 완료되면 Chat/Approvals/Sessions/Settings를 사용할 수 있어요.',
+                  AppI18n.t(context, AppTextKey.connectionIntroDescription),
                   style: TextStyle(
                     fontSize: 12,
                     height: 1.4,
@@ -7061,19 +7668,44 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 ),
                 const SizedBox(height: 16),
                 SegmentedButton<ConnectionType>(
-                  segments: const [
+                  segments: [
                     ButtonSegment<ConnectionType>(
                       value: ConnectionType.local,
-                      label: Text('로컬'),
+                      label: Text(
+                        AppI18n.t(context, AppTextKey.localServerMode),
+                        maxLines: 1,
+                        softWrap: false,
+                        overflow: TextOverflow.fade,
+                      ),
                       icon: Icon(Icons.computer, size: 18),
                     ),
                     ButtonSegment<ConnectionType>(
                       value: ConnectionType.relay,
-                      label: Text('릴레이'),
+                      label: Text(
+                        AppI18n.t(context, AppTextKey.relayServerMode),
+                        maxLines: 1,
+                        softWrap: false,
+                        overflow: TextOverflow.fade,
+                      ),
                       icon: Icon(Icons.cloud, size: 18),
                     ),
                   ],
                   selected: {_connectionType},
+                  style: SegmentedButton.styleFrom(
+                    selectedForegroundColor:
+                        Theme.of(context).colorScheme.onPrimaryContainer,
+                    selectedBackgroundColor:
+                        Theme.of(context).colorScheme.primaryContainer,
+                    backgroundColor:
+                        Theme.of(context).colorScheme.surfaceContainerHighest,
+                    side: BorderSide(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .outline
+                          .withOpacity(0.4),
+                    ),
+                  ),
+                  showSelectedIcon: true,
                   onSelectionChanged: isBusy
                       ? null
                       : (selection) {
@@ -7145,19 +7777,30 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.link),
-                    label: Text(isBusy ? '처리 중...' : '연결하기'),
+                    label: Text(isBusy
+                        ? AppI18n.t(context, AppTextKey.connectingAction)
+                        : AppI18n.t(context, AppTextKey.connectAction)),
                   ),
                 ),
-                if (!_isDemoMode && widget.onEnterDemoMode != null) ...[
+                if (!_isDemoMode) ...[
                   const SizedBox(height: 10),
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
                       onPressed: () {
-                        unawaited(_enterDemoMode());
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => SettingsPage(
+                              isDemoMode: _isDemoMode,
+                              onExitDemoMode: widget.onExitDemoMode,
+                              onEnterDemoMode: widget.onEnterDemoMode,
+                            ),
+                          ),
+                        );
                       },
-                      icon: const Icon(Icons.visibility),
-                      label: const Text('앱 둘러보기 시작'),
+                      icon: const Icon(Icons.settings_outlined),
+                      label: Text(
+                          AppI18n.t(context, AppTextKey.quickOpenSettings)),
                     ),
                   ),
                 ],
@@ -7194,14 +7837,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     child: OutlinedButton.icon(
                       onPressed: _forceStopReconnect,
                       icon: const Icon(Icons.stop_circle_outlined),
-                      label: const Text('자동 재연결 중지'),
+                      label: Text(
+                          AppI18n.t(context, AppTextKey.forceStopReconnect)),
                     ),
                   ),
                 ],
                 if (_lastConnectionError != null) ...[
                   const SizedBox(height: 10),
                   Text(
-                    '마지막 오류: $_lastConnectionError',
+                    '${AppI18n.t(context, AppTextKey.lastErrorLabel)}: $_lastConnectionError',
                     style: TextStyle(
                       fontSize: 11,
                       color: Theme.of(context).colorScheme.error,
@@ -7214,7 +7858,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           if (history.isNotEmpty) ...[
             const SizedBox(height: 16),
             Text(
-              '최근 연결',
+              AppI18n.t(context, AppTextKey.recentConnections),
               style: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w700,
@@ -7233,7 +7877,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           : Icons.cloud_outlined,
                     ),
                     title: Text(item.displayText),
-                    subtitle: Text(item.relativeTime),
+                    subtitle: Text(item.relativeTimeForLanguage(
+                        isEnglish: AppI18n.isEnglish(context))),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: isBusy ? null : () => _connectFromHistory(item),
                   );
@@ -7249,13 +7894,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   String _homeTabTitle(HomeTab tab) {
     switch (tab) {
       case HomeTab.chat:
-        return 'Chat';
+        return AppI18n.t(context, AppTextKey.homeTabChatTitle);
       case HomeTab.approvals:
-        return 'Approvals';
+        return AppI18n.t(context, AppTextKey.homeTabApprovalsTitle);
       case HomeTab.sessions:
-        return 'Sessions';
+        return AppI18n.t(context, AppTextKey.homeTabSessionsTitle);
       case HomeTab.settings:
-        return 'Settings';
+        return AppI18n.t(context, AppTextKey.homeTabSettingsTitle);
     }
   }
 
@@ -7263,25 +7908,34 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     switch (tab) {
       case HomeTab.chat:
         return _isConnected
-            ? '대화를 이어가고 Codex 진행 상황을 확인하세요.'
-            : '연결 후 바로 프롬프트를 보낼 수 있어요.';
+            ? AppI18n.t(context, AppTextKey.homeTabChatSubtitleConnected)
+            : AppI18n.t(context, AppTextKey.homeTabChatSubtitleDisconnected);
       case HomeTab.approvals:
-        return '모바일 승인 요청과 대기 중인 액션을 한곳에서 처리합니다.';
+        return AppI18n.t(context, AppTextKey.homeTabApprovalsSubtitle);
       case HomeTab.sessions:
-        return '연결 상태와 최근 연결 정보를 확인합니다.';
+        return AppI18n.t(context, AppTextKey.homeTabSessionsSubtitle);
       case HomeTab.settings:
-        return '앱 환경설정과 기본 동작을 정리합니다.';
+        return AppI18n.t(context, AppTextKey.homeTabSettingsSubtitle);
     }
   }
 
   Future<void> _selectHomeTab(HomeTab tab) async {
     if (!mounted) return;
-    setState(() => _selectedHomeTab = tab);
+    setState(() {
+      _selectedHomeTab = tab;
+      if (tab != HomeTab.approvals && _traceAutoRefresh) {
+        _setTraceAutoRefresh(false);
+      }
+    });
 
     if (!_isConnected) return;
     if (tab == HomeTab.approvals && _connectionType == ConnectionType.relay) {
       unawaited(_loadCommandApprovals(silent: true));
       unawaited(_loadCommandEvents(silent: true));
+      unawaited(_loadRecentTraceIds());
+      if (_traceIdController.text.trim().isNotEmpty) {
+        unawaited(_loadTraceTimeline(silent: true));
+      }
     }
     if (tab == HomeTab.sessions) {
       unawaited(_loadSessionInfo());
@@ -7303,6 +7957,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       onRefresh: () async {
         await _loadCommandApprovals(silent: true);
         await _loadCommandEvents(silent: true);
+        await _loadRecentTraceIds();
+        if (_traceIdController.text.trim().isNotEmpty) {
+          await _loadTraceTimeline(silent: true);
+        }
       },
       codexRequestTitle: _codexRequestTitle,
       codexRequestSummary: _codexRequestSummary,
@@ -7318,6 +7976,33 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       },
       onMarkRelayApprovalLater: _markRelayApprovalLater,
       truncateForLog: _truncateForLog,
+      tracePanel: TraceTimelinePanel(
+        enabled: _isConnected && _connectionType == ConnectionType.relay,
+        traceIdController: _traceIdController,
+        recentTraceIds: _recentTraceIds,
+        loading: _loadingTraceTimeline,
+        autoRefresh: _traceAutoRefresh,
+        error: _traceTimelineError,
+        timeline: _traceTimeline,
+        onRefreshRecent: () {
+          unawaited(_loadRecentTraceIds());
+        },
+        onFetchTimeline: () {
+          unawaited(_loadTraceTimeline());
+        },
+        onSelectRecent: (traceId) {
+          _traceIdController.text = traceId;
+          unawaited(_loadTraceTimeline(traceId: traceId));
+        },
+        onAutoRefreshChanged: (enabled) {
+          setState(() {
+            _setTraceAutoRefresh(enabled);
+          });
+        },
+        onCopyReport: () {
+          unawaited(_copyTraceTimelineReport());
+        },
+      ),
     );
   }
 
@@ -7347,13 +8032,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       onOpenSettings: () {
         Navigator.of(context).push(
           MaterialPageRoute(
-              builder: (context) => SettingsPage(
-                isDemoMode: _isDemoMode,
-                onExitDemoMode: widget.onExitDemoMode,
-                onEnterDemoMode: widget.onEnterDemoMode,
-              ),
+            builder: (context) => SettingsPage(
+              isDemoMode: _isDemoMode,
+              onExitDemoMode: widget.onExitDemoMode,
+              onEnterDemoMode: widget.onEnterDemoMode,
             ),
-          );
+          ),
+        );
       },
     );
   }
@@ -7429,19 +8114,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          Theme.of(context).colorScheme.primary,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
                     Text(
-                      '응답 대기 중',
+                      AppI18n.t(
+                        context,
+                        _responseIndicatorState ==
+                                ResponseIndicatorState.receiving
+                            ? AppTextKey.homeTabReceivingResponse
+                            : AppTextKey.homeTabPendingResponse,
+                      ),
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
@@ -7455,18 +8135,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           // 설정 버튼
           IconButton(
             icon: const Icon(Icons.settings_outlined),
-            tooltip: _selectedHomeTab == HomeTab.settings ? '전체 설정' : '설정 탭',
+            tooltip: _selectedHomeTab == HomeTab.settings
+                ? AppI18n.t(context, AppTextKey.openFullSettings)
+                : AppI18n.t(context, AppTextKey.settingsTabHint),
             onPressed: () {
               if (_selectedHomeTab == HomeTab.settings) {
                 Navigator.of(context).push(
                   MaterialPageRoute(
-                  builder: (context) => SettingsPage(
-                    isDemoMode: _isDemoMode,
-                    onExitDemoMode: widget.onExitDemoMode,
-                    onEnterDemoMode: widget.onEnterDemoMode,
+                    builder: (context) => SettingsPage(
+                      isDemoMode: _isDemoMode,
+                      onExitDemoMode: widget.onExitDemoMode,
+                      onEnterDemoMode: widget.onEnterDemoMode,
+                    ),
                   ),
-                ),
-              );
+                );
                 return;
               }
               unawaited(_selectHomeTab(HomeTab.settings));
@@ -7513,7 +8195,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                               ),
                             ),
                             title: Text(
-                              _isConnected ? '연결됨' : '연결 안 됨',
+                              _isConnected
+                                  ? AppI18n.t(
+                                      context, AppTextKey.statusConnected)
+                                  : AppI18n.t(
+                                      context, AppTextKey.statusNotConnected),
                               style: TextStyle(
                                 fontWeight: FontWeight.w600,
                                 color: _isConnected
@@ -7526,11 +8212,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             subtitle: Text(
                               _isConnected
                                   ? (_connectionType == ConnectionType.local
-                                      ? '로컬 서버 모드'
+                                      ? AppI18n.t(
+                                          context, AppTextKey.localServerMode)
                                       : (_sessionId != null
-                                          ? '릴레이 모드 • 세션: $_sessionId'
-                                          : '릴레이 모드'))
-                                  : '연결을 설정하세요',
+                                          ? '${AppI18n.t(context, AppTextKey.relayServerMode)} • ${AppI18n.t(context, AppTextKey.sessionLabel)} $_sessionId'
+                                          : AppI18n.t(context,
+                                              AppTextKey.relayServerMode)))
+                                  : AppI18n.t(
+                                      context, AppTextKey.setConnectionHint),
                               style: TextStyle(
                                 fontSize: 12,
                                 color: Theme.of(context)
@@ -7548,7 +8237,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                   children: [
                                     // 연결 타입 선택
                                     Text(
-                                      '연결 타입',
+                                      AppI18n.t(context,
+                                          AppTextKey.connectionTypeLabel),
                                       style: TextStyle(
                                         fontSize: 14,
                                         fontWeight: FontWeight.w600,
@@ -7559,19 +8249,51 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                     ),
                                     const SizedBox(height: 12),
                                     SegmentedButton<ConnectionType>(
-                                      segments: const [
+                                      segments: [
                                         ButtonSegment<ConnectionType>(
                                           value: ConnectionType.local,
-                                          label: Text('로컬 서버'),
+                                          label: Text(
+                                            AppI18n.t(context,
+                                                AppTextKey.localServerMode),
+                                            maxLines: 1,
+                                            softWrap: false,
+                                            overflow: TextOverflow.fade,
+                                          ),
                                           icon: Icon(Icons.computer, size: 18),
                                         ),
                                         ButtonSegment<ConnectionType>(
                                           value: ConnectionType.relay,
-                                          label: Text('릴레이 서버'),
+                                          label: Text(
+                                            AppI18n.t(context,
+                                                AppTextKey.relayServerMode),
+                                            maxLines: 1,
+                                            softWrap: false,
+                                            overflow: TextOverflow.fade,
+                                          ),
                                           icon: Icon(Icons.cloud, size: 18),
                                         ),
                                       ],
                                       selected: {_connectionType},
+                                      style: SegmentedButton.styleFrom(
+                                        selectedForegroundColor:
+                                            Theme.of(context)
+                                                .colorScheme
+                                                .onPrimaryContainer,
+                                        selectedBackgroundColor:
+                                            Theme.of(context)
+                                                .colorScheme
+                                                .primaryContainer,
+                                        backgroundColor: Theme.of(context)
+                                            .colorScheme
+                                            .surfaceContainerHighest,
+                                        side: BorderSide(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .outline
+                                              .withOpacity(0.4),
+                                        ),
+                                      ),
+                                      showSelectedIcon: true,
                                       onSelectionChanged: _isConnected
                                           ? null
                                           : (Set<ConnectionType> newSelection) {
@@ -7778,7 +8500,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                 CrossAxisAlignment.start,
                                             children: [
                                               Text(
-                                                '최근 연결',
+                                                AppI18n.t(
+                                                    context,
+                                                    AppTextKey
+                                                        .recentConnections),
                                                 style: TextStyle(
                                                   fontSize: 14,
                                                   fontWeight: FontWeight.w600,
@@ -7788,7 +8513,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                 ),
                                               ),
                                               Text(
-                                                '탭하면 재연결됩니다',
+                                                AppI18n.t(
+                                                    context,
+                                                    AppTextKey
+                                                        .tapReconnectHint),
                                                 style: TextStyle(
                                                   fontSize: 11,
                                                   color: Theme.of(context)
@@ -7961,7 +8689,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                                   ),
                                                                 ),
                                                                 Text(
-                                                                  item.relativeTime,
+                                                                  item.relativeTimeForLanguage(
+                                                                      isEnglish:
+                                                                          AppI18n.isEnglish(
+                                                                              context)),
                                                                   style:
                                                                       TextStyle(
                                                                     fontSize:
@@ -8268,8 +8999,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                   Text(
                                                     _connectionType ==
                                                             ConnectionType.local
-                                                        ? '로컬 서버에 연결됨'
-                                                        : '릴레이 서버에 연결됨',
+                                                        ? AppI18n.t(
+                                                            context,
+                                                            AppTextKey
+                                                                .sessionsLocalConnectedText,
+                                                          )
+                                                        : AppI18n.t(
+                                                            context,
+                                                            AppTextKey
+                                                                .sessionsRelayConnectedText,
+                                                          ),
                                                     style: TextStyle(
                                                       fontSize: 14,
                                                       fontWeight:
@@ -8288,7 +9027,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                       children: [
                                                         Expanded(
                                                           child: Text(
-                                                            '세션 ID: $_sessionId',
+                                                            '${AppI18n.t(context, AppTextKey.sessionLabel)} ID: $_sessionId',
                                                             style: TextStyle(
                                                               fontSize: 12,
                                                               fontWeight:
@@ -9196,7 +9935,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                                 : const Icon(Icons.send,
                                                     size: 18),
                                             label: Text(_isWaitingForResponse
-                                                ? '전송 중...'
+                                                ? (_responseIndicatorState ==
+                                                        ResponseIndicatorState
+                                                            .receiving
+                                                    ? '응답 받는 중...'
+                                                    : '전송 중...')
                                                 : '전송'),
                                             style: FilledButton.styleFrom(
                                               padding:
@@ -10583,6 +11326,56 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                               ],
                                             );
                                           }),
+                                          const Divider(height: 20),
+                                          Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 12, vertical: 4),
+                                            child: Align(
+                                              alignment: Alignment.centerLeft,
+                                              child: Text(
+                                                'Trace timeline',
+                                                style: TextStyle(
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurface,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          TraceTimelinePanel(
+                                            enabled: _isConnected &&
+                                                _connectionType ==
+                                                    ConnectionType.relay,
+                                            traceIdController:
+                                                _traceIdController,
+                                            recentTraceIds: _recentTraceIds,
+                                            loading: _loadingTraceTimeline,
+                                            autoRefresh: _traceAutoRefresh,
+                                            error: _traceTimelineError,
+                                            timeline: _traceTimeline,
+                                            onRefreshRecent: () {
+                                              unawaited(_loadRecentTraceIds());
+                                            },
+                                            onFetchTimeline: () {
+                                              unawaited(_loadTraceTimeline());
+                                            },
+                                            onSelectRecent: (traceId) {
+                                              _traceIdController.text = traceId;
+                                              unawaited(_loadTraceTimeline(
+                                                  traceId: traceId));
+                                            },
+                                            onAutoRefreshChanged: (enabled) {
+                                              setState(() {
+                                                _setTraceAutoRefresh(enabled);
+                                              });
+                                            },
+                                            onCopyReport: () {
+                                              unawaited(
+                                                  _copyTraceTimelineReport());
+                                            },
+                                          ),
                                           const SizedBox(height: 8),
                                         ],
                                       ),

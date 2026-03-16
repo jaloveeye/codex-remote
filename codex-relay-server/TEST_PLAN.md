@@ -22,28 +22,28 @@ Run the test scripts from the repository root in another terminal.
 
 ```bash
 node test-relay-full.js
-node test-relay-full.js https://relay.example.com
+node test-relay-full.js https://codex-relay.jaloveeye.com
 ```
 
 ### sessions-waiting-for-pc / stale PC
 
 ```bash
 node test-relay-sessions-waiting.js
-node test-relay-sessions-waiting.js https://relay.example.com
+node test-relay-sessions-waiting.js https://codex-relay.jaloveeye.com
 ```
 
 ### PIN setup and verification
 
 ```bash
 node test-relay-pin.js
-node test-relay-pin.js https://relay.example.com
+node test-relay-pin.js https://codex-relay.jaloveeye.com
 ```
 
 ### Inspect a specific session queue
 
 ```bash
 node test-relay-message.js ABC123
-node test-relay-message.js ABC123 https://relay.example.com
+node test-relay-message.js ABC123 https://codex-relay.jaloveeye.com
 ```
 
 ## 3. Manual tests
@@ -127,28 +127,28 @@ npm run dev
 
 ```bash
 node test-relay-full.js
-node test-relay-full.js https://relay.example.com
+node test-relay-full.js https://codex-relay.jaloveeye.com
 ```
 
 ### sessions-waiting-for-pc / stale PC
 
 ```bash
 node test-relay-sessions-waiting.js
-node test-relay-sessions-waiting.js https://relay.example.com
+node test-relay-sessions-waiting.js https://codex-relay.jaloveeye.com
 ```
 
 ### PIN 설정 및 검증
 
 ```bash
 node test-relay-pin.js
-node test-relay-pin.js https://relay.example.com
+node test-relay-pin.js https://codex-relay.jaloveeye.com
 ```
 
 ### 특정 세션 큐 확인
 
 ```bash
 node test-relay-message.js ABC123
-node test-relay-message.js ABC123 https://relay.example.com
+node test-relay-message.js ABC123 https://codex-relay.jaloveeye.com
 ```
 
 ## 3. 수동 테스트

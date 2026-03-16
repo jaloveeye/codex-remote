@@ -8,13 +8,15 @@ exports.CONFIG = {
     // WebSocket server port
     WEBSOCKET_PORT: 8766,
     // Relay server URL
-    RELAY_SERVER_URL: process.env.RELAY_SERVER_URL || 'https://relay.example.com',
+    RELAY_SERVER_URL: process.env.RELAY_SERVER_URL || 'https://codex-relay.jaloveeye.com',
     // Codex app-server command
     CODEX_COMMAND: process.env.CODEX_COMMAND || 'codex',
     CODEX_APP_SERVER_ARGS: (process.env.CODEX_APP_SERVER_ARGS || 'app-server')
         .split(' ')
         .map((arg) => arg.trim())
         .filter((arg) => arg.length > 0),
+    // 스트리밍 chunk 전송 사용 여부 (체감 속도 우선 기본값: true)
+    STREAM_CHAT_CHUNKS: (process.env.CODEX_REMOTE_STREAM_CHAT_CHUNKS || 'true').toLowerCase() === 'true',
     // Port range for finding available ports
     PORT_SEARCH_MAX_ATTEMPTS: 10,
     // File paths

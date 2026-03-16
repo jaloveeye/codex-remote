@@ -1,0 +1,20 @@
+{
+  "extension.displayName": "Codex Remote",
+  "extension.description": "Remote control Codex from your mobile device via WebSocket or Relay Server",
+  "extension.configurationTitle": "Codex Remote",
+
+  "command.start": "Start Codex Remote",
+  "command.stop": "Stop Codex Remote",
+  "command.toggle": "Toggle Codex Remote",
+  "command.showConnections": "Show Connections",
+  "command.statusBarClick": "Open Codex Remote menu",
+  "command.checkRelayServer": "Check Relay Server",
+  "command.disconnectRelay": "End Relay Session",
+  "command.clearRelaySession": "Clear Relay Session",
+  "command.connectSessionById": "Connect to Relay Session by ID",
+  "command.setRelaySessionId": "Set Relay Session ID",
+
+  "config.relayServerUrl.description": "Base URL of the dedicated relay server used for remote sessions.",
+  "config.iosStoreUrl.description": "Deep link URL of Codex Remote app on iOS App Store for status bar links.",
+  "config.androidStoreUrl.description": "Play Store URL of Codex Remote app for status bar links."
+}

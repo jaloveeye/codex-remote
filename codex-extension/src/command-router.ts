@@ -295,6 +295,7 @@ export class CommandRouter {
           newSession,
           agentMode,
           command.senderDeviceId,
+          command.traceId || command.id,
           model,
           reasoningEffort,
           useIdeContext,

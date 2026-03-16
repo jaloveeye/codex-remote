@@ -20,13 +20,13 @@ flutter pub get
 flutter run --dart-define=RELAY_SERVER_URL=http://localhost:3000
 ```
 
-For a deployed relay, replace the URL with your own relay endpoint such as `https://relay.example.com`.
+For a deployed relay, replace the URL with your own relay endpoint such as `https://codex-relay.jaloveeye.com`.
 
 ### Build for web
 
 ```bash
 flutter pub get
-flutter build web --release --base-href / --dart-define=RELAY_SERVER_URL=https://relay.example.com
+flutter build web --release --base-href / --dart-define=RELAY_SERVER_URL=https://codex-relay.jaloveeye.com
 ```
 
 Deploy the generated `build/web` output to your preferred static hosting provider.
@@ -53,13 +53,13 @@ flutter pub get
 flutter run --dart-define=RELAY_SERVER_URL=http://localhost:3000
 ```
 
-배포된 릴레이를 사용할 경우 `https://relay.example.com` 같은 본인 릴레이 URL로 바꾸세요.
+배포된 릴레이를 사용할 경우 `https://codex-relay.jaloveeye.com` 같은 본인 릴레이 URL로 바꾸세요.
 
 ### 웹 빌드
 
 ```bash
 flutter pub get
-flutter build web --release --base-href / --dart-define=RELAY_SERVER_URL=https://relay.example.com
+flutter build web --release --base-href / --dart-define=RELAY_SERVER_URL=https://codex-relay.jaloveeye.com
 ```
 
 생성된 `build/web` 출력물을 원하는 정적 호스팅에 배포하면 됩니다.

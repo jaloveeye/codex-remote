@@ -62,19 +62,23 @@ class ConnectionHistoryItem {
     }
   }
 
-  // 상대 시간 문자열
+  // 상대 시간 문자열(기본: 한국어)
   String get relativeTime {
+    return relativeTimeForLanguage(isEnglish: false);
+  }
+
+  String relativeTimeForLanguage({bool isEnglish = false}) {
     final now = DateTime.now();
     final diff = now.difference(timestamp);
 
     if (diff.inMinutes < 1) {
-      return '방금 전';
+      return isEnglish ? 'just now' : '방금 전';
     } else if (diff.inMinutes < 60) {
-      return '${diff.inMinutes}분 전';
+      return isEnglish ? '${diff.inMinutes} min ago' : '${diff.inMinutes}분 전';
     } else if (diff.inHours < 24) {
-      return '${diff.inHours}시간 전';
+      return isEnglish ? '${diff.inHours} hr ago' : '${diff.inHours}시간 전';
     } else if (diff.inDays < 7) {
-      return '${diff.inDays}일 전';
+      return isEnglish ? '${diff.inDays} days ago' : '${diff.inDays}일 전';
     } else {
       return '${timestamp.month}/${timestamp.day}';
     }
@@ -85,7 +89,8 @@ List<ConnectionHistoryItem> parseConnectionHistory(String historyJson) {
   try {
     final historyList = jsonDecode(historyJson) as List;
     return historyList
-        .map((item) => ConnectionHistoryItem.fromJson(item as Map<String, dynamic>))
+        .map((item) =>
+            ConnectionHistoryItem.fromJson(item as Map<String, dynamic>))
         .toList();
   } catch (_) {
     return [];
