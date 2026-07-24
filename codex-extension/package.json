@@ -2,7 +2,7 @@
   "name": "codex-remote-extension",
   "displayName": "%extension.displayName%",
   "description": "%extension.description%",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "jaloveeye",
   "license": "MIT",
   "repository": {
@@ -113,7 +113,7 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
-    "ws": "^8.19.0"
+    "ws": "^8.21.1"
   },
   "galleryBanner": {
     "color": "#1f6f43",

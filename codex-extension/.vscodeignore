@@ -7,7 +7,9 @@ tsconfig.json
 node_modules/**
 !node_modules/ws/**
 !node_modules/ws/**/*
-*.map
+**/*.map
+out/**/*.test.js
+scripts/**
 .DS_Store
 *.vsix
 ../**

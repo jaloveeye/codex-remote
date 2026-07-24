@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- Coalesce concurrent Codex runtime capability requests with a short-lived cache.
+- Resolve runtime models dynamically and preserve supported explicit selections.
+- Omit stale or unsupported model IDs so Codex can use the current account default.
+- Update the bundled WebSocket runtime to `ws` 8.21.1.
+
 ## 0.2.0
 
 - Add English/Korean localization for web landing pages and extension metadata.
