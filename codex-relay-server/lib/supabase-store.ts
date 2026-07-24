@@ -13,7 +13,10 @@ import type {
 } from "./types.js";
 import { TTL, MAX_MOBILE_DEVICE_IDS } from "./types.js";
 import type { PollMessagesResult } from "./types.js";
-import { pollMessagesWithClient } from "./supabase-poll.js";
+import {
+  createCompatiblePoller,
+  pollMessagesWithClient,
+} from "./supabase-poll.js";
 import {
   reuseOrLoadMobileDeviceIds,
   reuseOrLoadSession,
@@ -415,13 +418,35 @@ export async function receiveMessages(
   return messages;
 }
 
+const pollMessagesCompatible = createCompatiblePoller({
+  pollRpc: (input) => pollMessagesWithClient(getClient(), input),
+  pollLegacy: async ({ sessionId, deviceType, deviceId, limit }) => {
+    const session = await getSession(sessionId);
+    if (!session) {
+      return { sessionFound: false, messages: [] };
+    }
+    if (deviceType === "pc" && deviceId) {
+      await updatePcLastSeen(sessionId, deviceId);
+    }
+    return {
+      sessionFound: true,
+      messages: await receiveMessages(sessionId, deviceType, limit, deviceId),
+    };
+  },
+  onRpcUnavailable: () => {
+    console.warn(
+      "[Relay] relay_poll_messages RPC is unavailable; using legacy poll queries for 60 seconds"
+    );
+  },
+});
+
 export async function pollMessages(
   sessionId: string,
   deviceType: DeviceType,
   limit: number = 10,
   deviceId?: string
 ): Promise<PollMessagesResult> {
-  return pollMessagesWithClient(getClient(), {
+  return pollMessagesCompatible({
     sessionId,
     deviceType,
     deviceId,

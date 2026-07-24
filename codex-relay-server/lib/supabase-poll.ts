@@ -8,7 +8,10 @@ export interface SupabasePollClient {
   rpc(
     name: string,
     args: Record<string, unknown>
-  ): Promise<{ data: unknown; error: null | { message: string } }>;
+  ): Promise<{
+    data: unknown;
+    error: null | { message: string; code?: string };
+  }>;
 }
 
 export interface SupabasePollInput {
@@ -16,6 +19,18 @@ export interface SupabasePollInput {
   deviceType: DeviceType;
   deviceId?: string;
   limit: number;
+}
+
+interface PollError extends Error {
+  code?: string;
+}
+
+export interface CompatiblePollerOptions {
+  pollRpc: (input: SupabasePollInput) => Promise<PollMessagesResult>;
+  pollLegacy: (input: SupabasePollInput) => Promise<PollMessagesResult>;
+  now?: () => number;
+  unavailableTtlMs?: number;
+  onRpcUnavailable?: (error: unknown) => void;
 }
 
 function normalizeRpcPayload(data: unknown): Record<string, unknown> {
@@ -41,7 +56,9 @@ export async function pollMessagesWithClient(
     p_limit: input.limit,
   });
   if (error) {
-    throw new Error(`pollMessages: ${error.message}`);
+    const rpcError = new Error(`pollMessages: ${error.message}`) as PollError;
+    rpcError.code = error.code;
+    throw rpcError;
   }
 
   const payload = normalizeRpcPayload(data);
@@ -50,5 +67,43 @@ export async function pollMessagesWithClient(
     messages: Array.isArray(payload.messages)
       ? (payload.messages as RelayMessage[])
       : [],
+  };
+}
+
+function isPollRpcUnavailable(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code =
+    "code" in error && typeof error.code === "string" ? error.code : "";
+  const message = error.message.toLowerCase();
+  const namesPollRpc = message.includes("relay_poll_messages");
+  return (
+    namesPollRpc &&
+    (code === "PGRST202" ||
+      code === "42883" ||
+      message.includes("could not find the function") ||
+      message.includes("does not exist"))
+  );
+}
+
+export function createCompatiblePoller(
+  options: CompatiblePollerOptions
+): (input: SupabasePollInput) => Promise<PollMessagesResult> {
+  const now = options.now ?? Date.now;
+  const unavailableTtlMs = options.unavailableTtlMs ?? 60_000;
+  let rpcUnavailableUntil = 0;
+
+  return async (input: SupabasePollInput): Promise<PollMessagesResult> => {
+    if (now() < rpcUnavailableUntil) {
+      return options.pollLegacy(input);
+    }
+
+    try {
+      return await options.pollRpc(input);
+    } catch (error) {
+      if (!isPollRpcUnavailable(error)) throw error;
+      rpcUnavailableUntil = now() + unavailableTtlMs;
+      options.onRpcUnavailable?.(error);
+      return options.pollLegacy(input);
+    }
   };
 }
