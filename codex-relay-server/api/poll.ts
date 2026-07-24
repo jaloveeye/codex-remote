@@ -115,7 +115,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (messages.length > 0) {
       const hop = deviceType === "pc" ? "ext.poll.recv" : "mobile.poll.recv";
-      await appendTraceHopsBestEffort(
+      // Trace persistence must never delay polling. A slow trace insert can
+      // otherwise hold the user-facing poll open until Vercel times it out.
+      void appendTraceHopsBestEffort(
         messages.map((message) => {
           const payload =
             message.data && typeof message.data === "object"

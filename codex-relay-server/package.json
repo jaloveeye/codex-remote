@@ -13,7 +13,9 @@
     "test:trace-api-shape": "node --experimental-strip-types scripts/test-trace-api-shape.ts",
     "test:trace-timeline": "node --experimental-strip-types scripts/test-trace-timeline.ts",
     "validate:command-event": "node scripts/validate-command-event-example.mjs",
-    "test:command-policy": "node --experimental-strip-types scripts/test-command-policy.ts"
+    "test:command-policy": "node --experimental-strip-types scripts/test-command-policy.ts",
+    "check:vercel-functions": "node scripts/check-vercel-function-count.mjs",
+    "test:deployed-routes": "node scripts/test-deployed-route-matrix.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
