@@ -15,6 +15,7 @@
     "validate:command-event": "node scripts/validate-command-event-example.mjs",
     "test:command-policy": "node --experimental-strip-types scripts/test-command-policy.ts",
     "check:vercel-functions": "node scripts/check-vercel-function-count.mjs",
+    "check:vercel-region": "node scripts/check-vercel-region.mjs",
     "test:deployed-routes": "node scripts/test-deployed-route-matrix.mjs"
   },
   "dependencies": {

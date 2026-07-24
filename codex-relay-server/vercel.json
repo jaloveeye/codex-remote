@@ -1,5 +1,6 @@
 {
   "version": 2,
+  "regions": ["icn1"],
   "builds": [
     { "src": "api/router.ts", "use": "@vercel/node@3.2.0" }
   ],
