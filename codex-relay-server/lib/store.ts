@@ -43,6 +43,9 @@ export const sendMessage = useSupabase
 export const receiveMessages = useSupabase
   ? supabaseStore.receiveMessages
   : redisStore.receiveMessages;
+export const pollMessages = useSupabase
+  ? supabaseStore.pollMessages
+  : redisStore.pollMessages;
 export const hasMessages = useSupabase
   ? supabaseStore.hasMessages
   : redisStore.hasMessages;

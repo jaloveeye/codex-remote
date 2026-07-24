@@ -14,13 +14,17 @@
     "test:trace-timeline": "node --experimental-strip-types scripts/test-trace-timeline.ts",
     "validate:command-event": "node scripts/validate-command-event-example.mjs",
     "test:command-policy": "node --experimental-strip-types scripts/test-command-policy.ts",
+    "test:supabase-poll": "node --experimental-strip-types scripts/test-supabase-poll.ts",
+    "test:store-query-shape": "node --experimental-strip-types scripts/test-store-query-shape.ts",
+    "test:background-work": "node --experimental-strip-types scripts/test-background-work.ts",
     "check:vercel-functions": "node scripts/check-vercel-function-count.mjs",
     "check:vercel-region": "node scripts/check-vercel-region.mjs",
     "test:deployed-routes": "node scripts/test-deployed-route-matrix.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
-    "@upstash/redis": "^1.34.0"
+    "@upstash/redis": "^1.34.0",
+    "@vercel/functions": "^3.7.5"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

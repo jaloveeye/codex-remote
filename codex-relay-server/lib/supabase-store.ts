@@ -12,6 +12,12 @@ import type {
   TraceEvent,
 } from "./types.js";
 import { TTL, MAX_MOBILE_DEVICE_IDS } from "./types.js";
+import type { PollMessagesResult } from "./types.js";
+import { pollMessagesWithClient } from "./supabase-poll.js";
+import {
+  reuseOrLoadMobileDeviceIds,
+  reuseOrLoadSession,
+} from "./store-query-shape.js";
 
 const PC_STALE_MS = 2 * 60 * 1000; // 2분
 
@@ -110,8 +116,9 @@ export async function getSession(sessionId: string): Promise<Session | null> {
     .from("relay_sessions")
     .select("*")
     .eq("session_id", sessionId)
-    .single();
-  if (error || !data) return null;
+    .maybeSingle();
+  if (error) throw new Error(`getSession: ${error.message}`);
+  if (!data) return null;
   return rowToSession(data);
 }
 
@@ -144,33 +151,31 @@ export async function updatePcLastSeen(
   sessionId: string,
   deviceId: string
 ): Promise<void> {
-  const session = await getSession(sessionId);
-  if (!session || session.pcDeviceId !== deviceId) return;
   const { error } = await getClient()
     .from("relay_sessions")
     .update({
       pc_last_seen_at: nowMs(),
       expires_at: sessionExpiresAt(),
     })
-    .eq("session_id", sessionId);
+    .eq("session_id", sessionId)
+    .eq("pc_device_id", deviceId);
   if (error) throw new Error(`updatePcLastSeen: ${error.message}`);
 }
 
 export async function findSessionsWaitingForPC(): Promise<Session[]> {
-  const ids = await getSessionIds();
-  if (ids.length === 0) return [];
+  const { data, error } = await getClient().from("relay_sessions").select("*");
+  if (error) throw new Error(`findSessionsWaitingForPC: ${error.message}`);
   const now = nowMs();
-  const waiting: Session[] = [];
-  for (const sid of ids) {
-    const session = await getSession(sid);
-    if (!session) continue;
-    const noPc = !session.pcDeviceId;
-    const pcStale =
-      session.pcDeviceId &&
-      (session.pcLastSeenAt == null ||
-        now - session.pcLastSeenAt > PC_STALE_MS);
-    if (noPc || pcStale) waiting.push(session);
-  }
+  const waiting: Session[] = (data || [])
+    .map(rowToSession)
+    .filter((session: Session) => {
+      const noPc = !session.pcDeviceId;
+      const pcStale =
+        session.pcDeviceId &&
+        (session.pcLastSeenAt == null ||
+          now - session.pcLastSeenAt > PC_STALE_MS);
+      return noPc || !!pcStale;
+    });
   waiting.sort((a, b) => {
     const aHasMobile = a.mobileDeviceIds && a.mobileDeviceIds.length > 0;
     const bHasMobile = b.mobileDeviceIds && b.mobileDeviceIds.length > 0;
@@ -182,16 +187,15 @@ export async function findSessionsWaitingForPC(): Promise<Session[]> {
 }
 
 export async function findSessionsWithMobile(): Promise<Session[]> {
-  const ids = await getSessionIds();
-  const sessions: Session[] = [];
-  for (const sid of ids) {
-    const session = await getSession(sid);
-    if (!session) continue;
-    const hasMobile =
-      (session.mobileDeviceIds && session.mobileDeviceIds.length > 0) ||
-      !!(session as any).mobileDeviceId;
-    if (hasMobile) sessions.push(session);
-  }
+  const { data, error } = await getClient().from("relay_sessions").select("*");
+  if (error) throw new Error(`findSessionsWithMobile: ${error.message}`);
+  const sessions: Session[] = (data || [])
+    .map(rowToSession)
+    .filter(
+      (session: Session) =>
+        (session.mobileDeviceIds && session.mobileDeviceIds.length > 0) ||
+        !!(session as any).mobileDeviceId
+    );
   sessions.sort((a, b) => b.createdAt - a.createdAt);
   return sessions;
 }
@@ -199,9 +203,12 @@ export async function findSessionsWithMobile(): Promise<Session[]> {
 export async function joinSession(
   sessionId: string,
   deviceId: string,
-  deviceType: DeviceType
+  deviceType: DeviceType,
+  existingSession?: Session
 ): Promise<Session | null> {
-  const session = await getSession(sessionId);
+  const session = await reuseOrLoadSession(existingSession, () =>
+    getSession(sessionId)
+  );
   if (!session) return null;
 
   const evictedMobileDeviceIds: string[] = [];
@@ -321,7 +328,8 @@ export async function getDeviceSession(
 
 export async function sendMessage(
   sessionId: string,
-  message: RelayMessage
+  message: RelayMessage,
+  mobileDeviceIds?: readonly string[]
 ): Promise<void> {
   const client = getClient();
   const body = message as unknown as Record<string, unknown>;
@@ -335,12 +343,12 @@ export async function sendMessage(
   }> = [];
 
   if (message.to === "mobile") {
-    const session = await getSession(sessionId);
-    if (
-      session?.mobileDeviceIds &&
-      session.mobileDeviceIds.length > 0
-    ) {
-      for (const deviceId of session.mobileDeviceIds) {
+    const resolvedMobileDeviceIds = await reuseOrLoadMobileDeviceIds(
+      mobileDeviceIds,
+      async () => (await getSession(sessionId))?.mobileDeviceIds ?? []
+    );
+    if (resolvedMobileDeviceIds.length > 0) {
+      for (const deviceId of resolvedMobileDeviceIds) {
         rows.push({
           session_id: sessionId,
           direction: "pc2device",
@@ -405,6 +413,20 @@ export async function receiveMessages(
 
   await client.from("relay_messages").delete().in("id", ids);
   return messages;
+}
+
+export async function pollMessages(
+  sessionId: string,
+  deviceType: DeviceType,
+  limit: number = 10,
+  deviceId?: string
+): Promise<PollMessagesResult> {
+  return pollMessagesWithClient(getClient(), {
+    sessionId,
+    deviceType,
+    deviceId,
+    limit,
+  });
 }
 
 export async function hasMessages(
