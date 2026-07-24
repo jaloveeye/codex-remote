@@ -9,7 +9,12 @@ import {
   CommandApprovalRequest,
   TraceEvent,
   MAX_MOBILE_DEVICE_IDS,
+  PollMessagesResult,
 } from "./types.js";
+import {
+  reuseOrLoadMobileDeviceIds,
+  reuseOrLoadSession,
+} from "./store-query-shape.js";
 
 // Upstash Redis 클라이언트 (lazy initialization)
 let _redis: Redis | null = null;
@@ -189,9 +194,12 @@ export async function findSessionsWithMobile(): Promise<Session[]> {
 export async function joinSession(
   sessionId: string,
   deviceId: string,
-  deviceType: DeviceType
+  deviceType: DeviceType,
+  existingSession?: Session
 ): Promise<Session | null> {
-  const session = await getSession(sessionId);
+  const session = await reuseOrLoadSession(existingSession, () =>
+    getSession(sessionId)
+  );
   if (!session) return null;
 
   const evictedMobileDeviceIds: string[] = [];
@@ -291,18 +299,18 @@ export async function getDeviceSession(
 // 메시지 전송 (큐에 추가)
 export async function sendMessage(
   sessionId: string,
-  message: RelayMessage
+  message: RelayMessage,
+  mobileDeviceIds?: readonly string[]
 ): Promise<void> {
   if (message.to === "mobile") {
     // PC → Mobile: 항상 모든 모바일 디바이스 큐 + 레거시 큐에 전송 (응답 누락 방지)
     // targetDeviceId가 있어도 브로드캐스트로 폴백해 최소 한 클라이언트는 응답을 받도록 함
-    const session = await getSession(sessionId);
-    if (
-      session &&
-      session.mobileDeviceIds &&
-      session.mobileDeviceIds.length > 0
-    ) {
-      for (const deviceId of session.mobileDeviceIds) {
+    const resolvedMobileDeviceIds = await reuseOrLoadMobileDeviceIds(
+      mobileDeviceIds,
+      async () => (await getSession(sessionId))?.mobileDeviceIds ?? []
+    );
+    if (resolvedMobileDeviceIds.length > 0) {
+      for (const deviceId of resolvedMobileDeviceIds) {
         const queueKey = REDIS_KEYS.messagesForDevice(sessionId, deviceId);
         await redis.lpush(queueKey, JSON.stringify(message));
         await redis.expire(queueKey, TTL.message);
@@ -352,6 +360,25 @@ export async function receiveMessages(
   }
 
   return messages;
+}
+
+export async function pollMessages(
+  sessionId: string,
+  deviceType: DeviceType,
+  limit: number = 10,
+  deviceId?: string
+): Promise<PollMessagesResult> {
+  const session = await getSession(sessionId);
+  if (!session) {
+    return { sessionFound: false, messages: [] };
+  }
+  if (deviceType === "pc" && deviceId) {
+    await updatePcLastSeen(sessionId, deviceId);
+  }
+  return {
+    sessionFound: true,
+    messages: await receiveMessages(sessionId, deviceType, limit, deviceId),
+  };
 }
 
 // 큐에 메시지가 있는지 확인

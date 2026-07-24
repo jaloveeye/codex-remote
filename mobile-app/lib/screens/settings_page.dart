@@ -448,7 +448,7 @@ class _SettingsPageState extends State<SettingsPage> {
     showAboutDialog(
       context: context,
       applicationName: AppI18n.t(context, AppTextKey.aboutTitle),
-      applicationVersion: '0.2.0',
+      applicationVersion: '0.2.1',
       applicationIcon: Container(
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(

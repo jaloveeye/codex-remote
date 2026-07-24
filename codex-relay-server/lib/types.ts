@@ -13,6 +13,11 @@ export interface RelayMessage {
   targetDeviceId?: string; // 응답을 받을 클라이언트 ID (유니캐스트)
 }
 
+export interface PollMessagesResult {
+  sessionFound: boolean;
+  messages: RelayMessage[];
+}
+
 export interface DeviceInfo {
   deviceId: string;
   deviceType: DeviceType;

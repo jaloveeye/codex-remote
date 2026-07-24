@@ -260,9 +260,9 @@ class AppI18n {
       AppTextKey.showHistoryTitle: '세션 및 대화 히스토리',
       AppTextKey.showHistorySub: '메인 화면에 히스토리 섹션 표시',
       AppTextKey.aboutTitle: 'Codex Remote',
-      AppTextKey.appVersion: '버전 0.2.0',
+      AppTextKey.appVersion: '버전 0.2.1',
       AppTextKey.appVersionSub: '모바일에서 Codex를 원격으로 제어하세요.',
-      AppTextKey.releaseSoonTitle: '0.2.0 준비 중',
+      AppTextKey.releaseSoonTitle: '0.2.1 준비 중',
       AppTextKey.releaseSoonMessage:
           '여기에는 출시형 설정, 진단, 브랜딩, 알림 옵션이 단계적으로 추가될 예정입니다.',
       AppTextKey.language: '언어',
@@ -524,10 +524,10 @@ class AppI18n {
       AppTextKey.showHistoryTitle: 'Session and chat history',
       AppTextKey.showHistorySub: 'Show history section on the main screen',
       AppTextKey.aboutTitle: 'Codex Remote',
-      AppTextKey.appVersion: 'Version 0.2.0',
+      AppTextKey.appVersion: 'Version 0.2.1',
       AppTextKey.appVersionSub:
           'Control Codex remotely from your mobile device.',
-      AppTextKey.releaseSoonTitle: 'Preparing 0.2.0',
+      AppTextKey.releaseSoonTitle: 'Preparing 0.2.1',
       AppTextKey.releaseSoonMessage:
           'Production-ready settings, diagnostics, branding, and notification options will be added gradually.',
       AppTextKey.language: 'Language',
@@ -818,10 +818,10 @@ class AppI18n {
       AppTextKey.showHistoryTitle: 'Session and chat history',
       AppTextKey.showHistorySub: 'Show history section on the main screen',
       AppTextKey.aboutTitle: 'Codex Remote',
-      AppTextKey.appVersion: 'Version 0.2.0',
+      AppTextKey.appVersion: 'Version 0.2.1',
       AppTextKey.appVersionSub:
           'Control Codex remotely from your mobile device.',
-      AppTextKey.releaseSoonTitle: 'Preparing 0.2.0',
+      AppTextKey.releaseSoonTitle: 'Preparing 0.2.1',
       AppTextKey.releaseSoonMessage:
           'Production-ready settings, diagnostics, branding, and notification options will be added gradually.',
       AppTextKey.language: 'Language',

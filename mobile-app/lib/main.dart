@@ -20,6 +20,7 @@ import 'services/polling_profile.dart';
 import 'services/response_indicator.dart';
 import 'services/codex_request_history.dart';
 import 'services/trace_timeline_ui.dart';
+import 'services/runtime_capability_policy.dart';
 import 'screens/settings_page.dart';
 import 'widgets/approvals_tab_view.dart';
 import 'widgets/chat_prompt_options_bar.dart';
@@ -847,7 +848,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Timer? _pollTimer;
   Timer? _capabilitiesLoadTimer;
   Timer? _capabilitiesStageTimer;
-  Timer? _capabilitiesFollowupTimer;
   bool _isRelayPollInFlight = false;
   int _lastRelayPollStartedAtMs = 0;
   int _traceIdSequence = 0;
@@ -939,22 +939,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     'plan',
     'debug',
   ];
-  static const List<Map<String, dynamic>> _fallbackModels = [
-    {
-      'model': 'gpt-5',
-      'displayName': 'GPT-5',
-      'isDefault': true,
-      'defaultReasoningEffort': 'medium',
-      'supportedReasoningEfforts': ['low', 'medium', 'high'],
-    },
-    {
-      'model': 'gpt-5-mini',
-      'displayName': 'GPT-5 mini',
-      'isDefault': false,
-      'defaultReasoningEffort': 'medium',
-      'supportedReasoningEfforts': ['low', 'medium', 'high'],
-    },
-  ];
+  static const List<Map<String, dynamic>> _fallbackModels = [];
   List<String> _availableAgentModes = List<String>.from(_fallbackAgentModes);
   List<Map<String, dynamic>> _availableModels =
       List<Map<String, dynamic>>.from(_fallbackModels);
@@ -962,8 +947,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool _supportsFlatMode = false;
   bool _capabilitiesFromCache = false;
   ModelCatalogLoadStage _modelCatalogLoadStage = ModelCatalogLoadStage.idle;
-  int _capabilitiesFollowupAttempts = 0;
-  static const int _maxCapabilitiesFollowupAttempts = 3;
+  final RuntimeCapabilitySingleFlight _capabilitiesSingleFlight =
+      RuntimeCapabilitySingleFlight();
   DateTime? _runtimeCapabilitiesRequestedAt;
   String? _actualSelectedMode; // 자동 모드로 선택된 경우 실제 선택된 모드 (null이면 사용자가 직접 선택)
   MessageItem? _lastUserPrompt; // 마지막 User Prompt 메시지 (모드 업데이트용)
@@ -1411,7 +1396,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _capabilitiesLoading = false;
         _capabilitiesFromCache = false;
         _modelCatalogLoadStage = ModelCatalogLoadStage.idle;
-        _capabilitiesFollowupAttempts = 0;
         _runtimeCapabilitiesRequestedAt = null;
         _supportsIdeContext = false;
         _supportsFlatMode = false;
@@ -1879,7 +1863,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           _capabilitiesLoading = false;
           _capabilitiesFromCache = false;
           _modelCatalogLoadStage = ModelCatalogLoadStage.idle;
-          _capabilitiesFollowupAttempts = 0;
           _runtimeCapabilitiesRequestedAt = null;
           _supportsIdeContext = false;
           _supportsFlatMode = false;
@@ -2693,12 +2676,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   String _normalizeModel(String model) {
-    final normalized = model.trim();
-    if (normalized.isEmpty || normalized == 'auto') return 'auto';
-    final exists = _availableModels.any(
-      (item) => (item['model'] ?? '').toString().trim() == normalized,
+    return normalizeRuntimeModel(
+      model,
+      catalogLoaded: _capabilitiesLoaded,
+      availableModels: _availableModels
+          .map((item) => (item['model'] ?? '').toString().trim())
+          .where((item) => item.isNotEmpty),
     );
-    return exists ? normalized : _getDefaultModelFromCapabilities();
   }
 
   String _normalizeReasoningEffort(String effort, [String? model]) {
@@ -2754,7 +2738,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void _cancelCapabilitiesSequenceTimers() {
     _capabilitiesLoadTimer?.cancel();
     _capabilitiesStageTimer?.cancel();
-    _capabilitiesFollowupTimer?.cancel();
   }
 
   void _armCapabilitiesLoadTimeout() {
@@ -2785,10 +2768,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           );
         }
       });
-      if (_capabilitiesFollowupAttempts < _maxCapabilitiesFollowupAttempts) {
-        _scheduleCapabilitiesFollowupLoad();
-        _armCapabilitiesLoadTimeout();
-      }
     });
   }
 
@@ -2823,25 +2802,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           );
         });
       });
-    });
-  }
-
-  void _scheduleCapabilitiesFollowupLoad() {
-    if (!_isConnected ||
-        _capabilitiesFollowupAttempts >= _maxCapabilitiesFollowupAttempts) {
-      return;
-    }
-    _capabilitiesFollowupAttempts += 1;
-    _capabilitiesFollowupTimer?.cancel();
-    _capabilitiesFollowupTimer = Timer(const Duration(milliseconds: 900), () {
-      if (!mounted || !_isConnected || _capabilitiesLoaded) return;
-      unawaited(
-          _sendCommand('get_runtime_capabilities', clientId: _currentClientId));
-      if (_connectionType == ConnectionType.relay) {
-        Future.delayed(const Duration(milliseconds: 120), () {
-          unawaited(_pollRelayMessagesOnce());
-        });
-      }
     });
   }
 
@@ -2943,7 +2903,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _cancelCapabilitiesSequenceTimers();
       _capabilitiesLoading = false;
       _capabilitiesFromCache = false;
-      _capabilitiesFollowupAttempts = 0;
       _modelCatalogLoadStage = ModelCatalogLoadStage.completed;
       if (wasLoading || !wasLoaded) {
         final defaultModelLabel =
@@ -3001,7 +2960,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _capabilitiesLoading = true;
     _capabilitiesFromCache = false;
     _modelCatalogLoadStage = ModelCatalogLoadStage.syncingAll;
-    if (wasLoading && _capabilitiesFollowupAttempts == 0) {
+    if (wasLoading) {
       final defaultModelLabel =
           _getModelDisplayName(_getDefaultModelFromCapabilities());
       _messages.add(
@@ -3020,7 +2979,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ));
     }
     _armCapabilitiesLoadTimeout();
-    _scheduleCapabilitiesFollowupLoad();
   }
 
   // 텍스트 내용을 분석하여 적절한 에이전트 모드 자동 선택 (Extension의 detectAgentMode와 동일한 로직)
@@ -3186,7 +3144,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _capabilitiesLoading = false;
         _capabilitiesFromCache = false;
         _modelCatalogLoadStage = ModelCatalogLoadStage.idle;
-        _capabilitiesFollowupAttempts = 0;
         _runtimeCapabilitiesRequestedAt = null;
         _supportsIdeContext = false;
         _supportsFlatMode = false;
@@ -4541,7 +4498,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _capabilitiesLoading = false;
       _capabilitiesFromCache = true;
       _modelCatalogLoadStage = ModelCatalogLoadStage.completed;
-      _capabilitiesFollowupAttempts = 0;
       _runtimeCapabilitiesRequestedAt = null;
       _supportsIdeContext = false;
       _supportsFlatMode = false;
@@ -4878,10 +4834,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _loadRuntimeCapabilities() async {
-    if (_isDemoMode) return;
-    if (!_isConnected) return;
+  Future<void> _loadRuntimeCapabilities() {
+    if (_isDemoMode || !_isConnected) return Future<void>.value();
+    return _capabilitiesSingleFlight.run(_loadRuntimeCapabilitiesOnce);
+  }
 
+  Future<void> _loadRuntimeCapabilitiesOnce() async {
     try {
       final cached = await AppSettings().getRuntimeCapabilitiesCache(
         maxAge: const Duration(hours: 24),
@@ -4889,7 +4847,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _cancelCapabilitiesSequenceTimers();
       setState(() {
         _capabilitiesLoading = true;
-        _capabilitiesFollowupAttempts = 0;
         _runtimeCapabilitiesRequestedAt = DateTime.now();
         if (cached != null) {
           _applyRuntimeCapabilities(cached.capabilities);

@@ -55,7 +55,7 @@ void main() {
       expect(find.text('테마'), findsOneWidget);
       expect(find.text('다크 모드'), findsOneWidget);
       expect(find.text('Codex Remote'), findsOneWidget);
-      expect(find.text('버전 0.2.0'), findsOneWidget);
+      expect(find.text('버전 0.2.1'), findsOneWidget);
 
       await tester.tap(find.text('테마'));
       await tester.pumpAndSettle();
