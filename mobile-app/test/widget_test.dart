@@ -27,7 +27,7 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  group('0.2.0 launch flow', () {
+  group('0.2.1 launch flow', () {
     testWidgets('첫 실행 시 온보딩 화면을 렌더링한다', (WidgetTester tester) async {
       await pumpApp(
         tester,
@@ -102,7 +102,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('설정'), findsOneWidget);
-      expect(find.text('버전 0.2.0'), findsOneWidget);
+      expect(find.text('버전 0.2.1'), findsOneWidget);
     });
   });
 }
