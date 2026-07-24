@@ -9,6 +9,7 @@
     "build": "vercel build",
     "deploy": "vercel --prod",
     "type-check": "tsc --noEmit",
+    "test:relay-router": "node --experimental-strip-types scripts/test-relay-router.ts",
     "test:trace-api-shape": "node --experimental-strip-types scripts/test-trace-api-shape.ts",
     "test:trace-timeline": "node --experimental-strip-types scripts/test-trace-timeline.ts",
     "validate:command-event": "node scripts/validate-command-event-example.mjs",
