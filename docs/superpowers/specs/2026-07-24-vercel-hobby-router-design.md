@@ -69,10 +69,10 @@ The existing friendly aliases also remain compatible:
 - `/api/trace/:traceId/timeline`
 - `/api/trace/:traceId/summary`
 
-Direct `.ts` URLs and direct dynamic calls to the three internal trace handler
-names are not documented client contracts. The extension, mobile application,
-tests, and documentation do not use them, so the router does not add new
-compatibility guarantees for those implementation paths.
+Direct `.ts` URLs are implementation details rather than documented client
+contracts, so the router does not add a compatibility guarantee for `.ts`
+suffixes. The direct `/api/trace-recent`, `/api/trace-summary`, and
+`/api/trace-timeline` paths remain supported as listed above.
 
 ## Components
 
@@ -116,7 +116,9 @@ turning them into independent functions.
 2. Add adapter-level tests for delegation and confirm they fail before
    implementation. Cover method/body/header/query preservation, wildcard
    removal, trace-ID injection, JSON `404`, and streaming `write`/`end`
-   pass-through.
+   pass-through. Include a spoofing case where a client supplies the synthetic
+   wildcard query key; the trusted rewrite path must still select the handler
+   and the client value must be removed before delegation.
 3. Run TypeScript type checking and all existing relay unit scripts.
 4. Run a local Vercel build and assert that it produces exactly one `.func`
    output.
