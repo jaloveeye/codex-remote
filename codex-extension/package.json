@@ -103,6 +103,7 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
+    "test:runtime-capabilities": "npm run compile && node scripts/test-runtime-capability-policy.mjs",
     "watch": "tsc -watch -p ./"
   },
   "devDependencies": {

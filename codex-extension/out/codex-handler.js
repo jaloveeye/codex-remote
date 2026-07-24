@@ -39,6 +39,7 @@ const readline = __importStar(require("readline"));
 const vscode = __importStar(require("vscode"));
 const config_1 = require("./config");
 const streaming_text_logic_1 = require("./streaming_text_logic");
+const runtime_capability_policy_1 = require("./runtime_capability_policy");
 class CodexHandler {
     constructor(outputChannel, wsServer, workspaceRoot) {
         this.outputChannel = null;
@@ -69,6 +70,7 @@ class CodexHandler {
             command: config_1.CONFIG.CODEX_COMMAND,
         };
         this.onCodexCliStatusChange = null;
+        this.runtimeCapabilitiesCache = new runtime_capability_policy_1.AsyncSingleFlightCache(15000);
         this.outputChannel = outputChannel || null;
         this.wsServer = wsServer || null;
         this.workspaceRoot = workspaceRoot || null;
@@ -545,6 +547,7 @@ class CodexHandler {
     handleProcessExit(reason) {
         this.initialized = false;
         this.initPromise = null;
+        this.runtimeCapabilitiesCache.invalidate();
         if (this.stdoutReader) {
             this.stdoutReader.removeAllListeners();
             this.stdoutReader.close();
@@ -1513,7 +1516,7 @@ class CodexHandler {
         })
             .filter((item) => item.model.length > 0);
     }
-    async getRuntimeCapabilities() {
+    async loadRuntimeCapabilities() {
         const startedAt = Date.now();
         const base = {
             provider: "codex",
@@ -1578,6 +1581,9 @@ class CodexHandler {
                 error: errorMessage,
             };
         }
+    }
+    async getRuntimeCapabilities() {
+        return this.runtimeCapabilitiesCache.get(() => this.loadRuntimeCapabilities(), (capabilities) => capabilities.ready && capabilities.models.length > 0);
     }
     async startTurn(threadId, text, selectedMode, selectedModel, selectedEffort) {
         this.log(`[CODEX] turn/start options - mode: ${selectedMode}, model: ${selectedModel || "auto"}, effort: ${selectedEffort}`);
@@ -1717,16 +1723,32 @@ class CodexHandler {
         else if (agentMode === "auto") {
             selectedMode = this.detectAgentMode(text) || "agent";
         }
-        const modelTrimmed = model?.trim();
-        const selectedModel = modelTrimmed && modelTrimmed.length > 0 && modelTrimmed !== "auto"
-            ? modelTrimmed
-            : undefined;
+        const capabilities = await this.getRuntimeCapabilities();
+        const modelResolution = (0, runtime_capability_policy_1.resolveRequestedModel)(model, {
+            ready: capabilities.ready,
+            models: capabilities.models,
+            defaultModel: capabilities.defaults.model,
+        });
+        const selectedModel = modelResolution.selectedModel;
         const selectedEffort = reasoningEffort && reasoningEffort !== "auto"
             ? this.normalizeReasoningEffort(reasoningEffort)
             : selectedMode === "plan"
                 ? "high"
                 : "medium";
-        this.log(`[CODEX] prompt config - mode: ${selectedMode}, model: ${selectedModel || "auto"}, effort: ${selectedEffort}, useIdeContext: ${useIdeContext}, useFlatMode: ${useFlatMode}`);
+        this.log(`[CODEX] prompt config - mode: ${selectedMode}, requestedModel: ${modelResolution.requestedModel}, effectiveModel: ${modelResolution.effectiveModel}, explicitModel: ${selectedModel || "none"}, fallback: ${modelResolution.fallbackReason || "none"}, effort: ${selectedEffort}, useIdeContext: ${useIdeContext}, useFlatMode: ${useFlatMode}`);
+        if (modelResolution.fallbackReason === "unsupported_model" ||
+            modelResolution.fallbackReason === "catalog_unavailable") {
+            this.log(`[CODEX] requested model "${modelResolution.requestedModel}" is not usable; Codex will select its current account default`, true);
+            if (this.wsServer) {
+                this.wsServer.send(JSON.stringify({
+                    type: "model_selection_resolved",
+                    requestedModel: modelResolution.requestedModel,
+                    effectiveModel: modelResolution.effectiveModel,
+                    fallbackReason: modelResolution.fallbackReason,
+                    timestamp: new Date().toISOString(),
+                }));
+            }
+        }
         await this.ensureServerReady();
         const threadId = await this.ensureThread(effectiveClientId, newSession);
         if (agentMode === "auto" && this.wsServer) {

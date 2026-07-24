@@ -7,6 +7,10 @@ import {
   combineExtractedParts,
   mergeStreamingAccumulator,
 } from "./streaming_text_logic";
+import {
+  AsyncSingleFlightCache,
+  resolveRequestedModel,
+} from "./runtime_capability_policy";
 
 type CodexAgentMode = "agent" | "ask" | "plan" | "debug" | "auto";
 type CodexReasoningEffort =
@@ -154,6 +158,8 @@ export class CodexHandler {
     command: CONFIG.CODEX_COMMAND,
   };
   private onCodexCliStatusChange: (() => void) | null = null;
+  private readonly runtimeCapabilitiesCache =
+    new AsyncSingleFlightCache<CodexRuntimeCapabilities>(15000);
 
   constructor(
     outputChannel?: vscode.OutputChannel,
@@ -738,6 +744,7 @@ export class CodexHandler {
   private handleProcessExit(reason: string): void {
     this.initialized = false;
     this.initPromise = null;
+    this.runtimeCapabilitiesCache.invalidate();
 
     if (this.stdoutReader) {
       this.stdoutReader.removeAllListeners();
@@ -2008,7 +2015,7 @@ export class CodexHandler {
       .filter((item) => item.model.length > 0);
   }
 
-  async getRuntimeCapabilities(): Promise<CodexRuntimeCapabilities> {
+  private async loadRuntimeCapabilities(): Promise<CodexRuntimeCapabilities> {
     const startedAt = Date.now();
     const base: CodexRuntimeCapabilities = {
       provider: "codex",
@@ -2094,6 +2101,14 @@ export class CodexHandler {
         error: errorMessage,
       };
     }
+  }
+
+  async getRuntimeCapabilities(): Promise<CodexRuntimeCapabilities> {
+    return this.runtimeCapabilitiesCache.get(
+      () => this.loadRuntimeCapabilities(),
+      (capabilities) =>
+        capabilities.ready && capabilities.models.length > 0
+    );
   }
 
   private async startTurn(
@@ -2286,11 +2301,13 @@ export class CodexHandler {
       selectedMode = this.detectAgentMode(text) || "agent";
     }
 
-    const modelTrimmed = model?.trim();
-    const selectedModel =
-      modelTrimmed && modelTrimmed.length > 0 && modelTrimmed !== "auto"
-        ? modelTrimmed
-        : undefined;
+    const capabilities = await this.getRuntimeCapabilities();
+    const modelResolution = resolveRequestedModel(model, {
+      ready: capabilities.ready,
+      models: capabilities.models,
+      defaultModel: capabilities.defaults.model,
+    });
+    const selectedModel = modelResolution.selectedModel;
     const selectedEffort =
       reasoningEffort && reasoningEffort !== "auto"
         ? this.normalizeReasoningEffort(reasoningEffort)
@@ -2299,10 +2316,35 @@ export class CodexHandler {
         : "medium";
 
     this.log(
-      `[CODEX] prompt config - mode: ${selectedMode}, model: ${
-        selectedModel || "auto"
-      }, effort: ${selectedEffort}, useIdeContext: ${useIdeContext}, useFlatMode: ${useFlatMode}`
+      `[CODEX] prompt config - mode: ${selectedMode}, requestedModel: ${
+        modelResolution.requestedModel
+      }, effectiveModel: ${modelResolution.effectiveModel}, explicitModel: ${
+        selectedModel || "none"
+      }, fallback: ${modelResolution.fallbackReason || "none"}, effort: ${
+        selectedEffort
+      }, useIdeContext: ${useIdeContext}, useFlatMode: ${useFlatMode}`
     );
+
+    if (
+      modelResolution.fallbackReason === "unsupported_model" ||
+      modelResolution.fallbackReason === "catalog_unavailable"
+    ) {
+      this.log(
+        `[CODEX] requested model "${modelResolution.requestedModel}" is not usable; Codex will select its current account default`,
+        true
+      );
+      if (this.wsServer) {
+        this.wsServer.send(
+          JSON.stringify({
+            type: "model_selection_resolved",
+            requestedModel: modelResolution.requestedModel,
+            effectiveModel: modelResolution.effectiveModel,
+            fallbackReason: modelResolution.fallbackReason,
+            timestamp: new Date().toISOString(),
+          })
+        );
+      }
+    }
 
     await this.ensureServerReady();
     const threadId = await this.ensureThread(effectiveClientId, newSession);
