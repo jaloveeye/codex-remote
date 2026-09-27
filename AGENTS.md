@@ -48,13 +48,17 @@
 - 유지보수: `skills/fm_09_hygiene-maint.md`
 
 ## 최근 작업 기록 (요약)
-- 일시: 2026-03-11
-- 브랜치: `feature/bilingual-web-extension`
-- 목적: 모바일 앱 다국어(i18n) 반영 검증 및 테스트 정합성 맞춤
-- 변경 파일: `mobile-app/lib/main.dart`, `mobile-app/lib/screens/settings_page.dart`, `mobile-app/lib/services/app_settings.dart`, `mobile-app/lib/services/app_i18n.dart`, `mobile-app/lib/widgets/*.dart`, `mobile-app/test/*.dart`, `mobile-app/pubspec.yaml`, `mobile-app/pubspec.lock`
+- 일시: 2026-09-27
+- 브랜치: `feature/relay-traffic-longpoll` (develop에서 분기)
+- 목적: 릴레이 서버 트래픽 절감 — (1) /api/poll 옵트인 롱폴, (2) PC 세션 대기 connect 지수 백오프, (4) 중복 PC heartbeat 제거 (유휴 세션 요청 ~6,700/h → ~290/h 목표)
+- 완료/변경 파일:
+  - 계획 문서: `docs/superpowers/plans/2026-09-27-relay-traffic-optimization.md` (재개 가이드 포함)
+  - `codex-relay-server/api/poll.ts` — 롱폴 wait 파라미터(기본 0, 상한 25초, 1초 간격 재확인, clientGone close 감시) 커밋 `a47b3cf`
 - 검증:
-  - `flutter analyze` (mobile-app): 통과(문법/타입 오류 없음, 100+ 기존/정보성 경고 존재)
-  - `flutter test` (mobile-app): 통과
+  - `cd codex-relay-server && npm run type-check` 통과
+  - diff 검증 완료 (계획 스니펫과 일치)
+- 미완료(다음 세션): Task 2 익스텐션(`relay-client.ts` 롱폴+백오프+heartbeat 제거, **151행 clearHeartbeat 삭제 필수**), Task 3 모바일(`main.dart` 롱폴+6초 커맨드메타 타이머), Task 4 `test-relay-longpoll.js` 스모크, 게이트(`build:extension`, `flutter analyze/test`, streaming merge 테스트)
 - 남은 리스크:
-  - 다수의 `withOpacity`, `deprecated` 경고 및 기존 코드 정리가 미적용(기능 동작에는 영향 없음).
-  - `AppI18n` 추가로 텍스트 키 누락/문구 품질 변경 시 테스트 문자열 동기화가 다시 필요.
+  - 서버 리배포 전까지 `wait`는 무시됨(구버전 서버) → 즉시응답 동작(기능 저하 없음). 리버티스: 배포는 사용자 승인 필요.
+  - 클라이언트 전환(익스텐션/앱 배포)은 서버 리배포 이후 권장(옵트인 설계로 순서 자유).
+  - opt 5~7(승인 piggyback, 백그라운드 폴링, 메시지 이중저장·trace 중복) 별도 과제로 미적용.
