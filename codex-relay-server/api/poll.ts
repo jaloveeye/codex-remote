@@ -1,15 +1,21 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
-  receiveMessages,
-  getSession,
   getDeviceSession,
-  updatePcLastSeen,
+  pollMessages,
 } from "../lib/store.js";
 import { ApiResponse, RelayMessage, DeviceType } from "../lib/types.js";
 import {
   appendTraceHopsBestEffort,
   resolveTraceIdentity,
 } from "../lib/trace-ingest.js";
+import { scheduleBackground } from "../lib/background-work.js";
+
+/** 롱폴 wait 파라미터 파싱(초). 유효하지 않으면 0 → 즉시응답. */
+function parseLongPollWait(raw: unknown): number {
+  const value = typeof raw === "string" ? Number(raw) : NaN;
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.min(value, 25);
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // CORS 헤더 설정
@@ -87,9 +93,56 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json(response);
     }
 
-    // 세션 존재 확인
-    const session = await getSession(sessionId);
-    if (!session) {
+    const maxLimit = Math.min(parseInt(limit as string) || 10, 50);
+
+    // 롱폴(옵트인): wait 초 동안 메시지가 생길 때까지 1초 간격으로 재확인.
+    // 기본 0 = 기존 즉시응답(구버전 클라이언트 하위호환). 상한 25초는
+    // router.ts maxDuration: 30 내부 오버헤드 마련 + stream.ts 25초 전례.
+    const waitSeconds = parseLongPollWait(req.query.wait);
+    const deadlineMs = Date.now() + waitSeconds * 1000;
+    // 클라이언트가 기다리지 않고 끊은 경우(타임아웃 등) 즉시 그만둔다
+    let clientGone = false;
+    req.on("close", () => {
+      clientGone = true;
+    });
+    const pollInput = {
+      sessionId: sessionId!,
+      deviceType: deviceType as DeviceType,
+      deviceId: deviceId as string | undefined,
+      limit: maxLimit,
+    };
+
+    let pollResult = await pollMessages(
+      pollInput.sessionId,
+      pollInput.deviceType,
+      pollInput.limit,
+      pollInput.deviceId
+    );
+
+    // 세션이 없으면 기다리지 않고 즉시 404 (재연결 로직이 빨리 반응해야 함)
+    while (
+      pollResult.sessionFound &&
+      !clientGone &&
+      pollResult.messages.length === 0 &&
+      Date.now() < deadlineMs
+    ) {
+      const sleepMs = Math.min(1000, deadlineMs - Date.now());
+      await new Promise((resolve) => setTimeout(resolve, sleepMs));
+      if (clientGone) break;
+      try {
+        pollResult = await pollMessages(
+          pollInput.sessionId,
+          pollInput.deviceType,
+          pollInput.limit,
+          pollInput.deviceId
+        );
+      } catch (error) {
+        // 대기 중 일시적 오류: hold를 깨지 말고 다음 tick에서 재시도
+        console.warn("Poll long-wait retry error:", error);
+      }
+    }
+
+    if (!pollResult.sessionFound) {
       const response: ApiResponse = {
         success: false,
         error: "Session not found",
@@ -98,52 +151,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(404).json(response);
     }
 
-    // PC 폴링 시 생존 시각 갱신 (findSessionsWaitingForPC에서 stale 판단에 사용)
-    if (deviceType === "pc" && deviceId && typeof deviceId === "string") {
-      await updatePcLastSeen(sessionId, deviceId);
-    }
-
-    // 메시지 가져오기
-    const maxLimit = Math.min(parseInt(limit as string) || 10, 50);
-    // deviceId가 있으면 개별 큐에서 메시지 수신 (멀티 클라이언트 지원)
-    const messages = await receiveMessages(
-      sessionId,
-      deviceType as DeviceType,
-      maxLimit,
-      deviceId as string | undefined
-    );
+    const messages = pollResult.messages;
 
     if (messages.length > 0) {
       const hop = deviceType === "pc" ? "ext.poll.recv" : "mobile.poll.recv";
-      await appendTraceHopsBestEffort(
-        messages.map((message) => {
-          const payload =
-            message.data && typeof message.data === "object"
-              ? (message.data as Record<string, unknown>)
-              : null;
-          const traceIdentity = resolveTraceIdentity(payload);
-          return {
-            sessionId,
-            hop,
-            traceId: traceIdentity.traceId,
-            commandId: traceIdentity.commandId,
-            relayMessageId: message.id,
-            senderDeviceId:
-              typeof message.senderDeviceId === "string"
-                ? message.senderDeviceId
-                : null,
-            targetDeviceId:
-              typeof message.targetDeviceId === "string"
-                ? message.targetDeviceId
-                : null,
-            clientId: payload && typeof payload.clientId === "string"
-              ? payload.clientId
-              : null,
-            meta: {
-              polledByDeviceType: deviceType,
-            },
-          };
-        })
+      // Trace persistence must never delay polling. A slow trace insert can
+      // otherwise hold the user-facing poll open until Vercel times it out.
+      scheduleBackground(() =>
+        appendTraceHopsBestEffort(
+          messages.map((message) => {
+            const payload =
+              message.data && typeof message.data === "object"
+                ? (message.data as Record<string, unknown>)
+                : null;
+            const traceIdentity = resolveTraceIdentity(payload);
+            return {
+              sessionId,
+              hop,
+              traceId: traceIdentity.traceId,
+              commandId: traceIdentity.commandId,
+              relayMessageId: message.id,
+              senderDeviceId:
+                typeof message.senderDeviceId === "string"
+                  ? message.senderDeviceId
+                  : null,
+              targetDeviceId:
+                typeof message.targetDeviceId === "string"
+                  ? message.targetDeviceId
+                  : null,
+              clientId:
+                payload && typeof payload.clientId === "string"
+                  ? payload.clientId
+                  : null,
+              meta: {
+                polledByDeviceType: deviceType,
+              },
+            };
+          })
+        )
       );
     }
 

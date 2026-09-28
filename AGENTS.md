@@ -48,13 +48,11 @@
 - 유지보수: `skills/fm_09_hygiene-maint.md`
 
 ## 최근 작업 기록 (요약)
-- 일시: 2026-03-11
-- 브랜치: `feature/bilingual-web-extension`
-- 목적: 모바일 앱 다국어(i18n) 반영 검증 및 테스트 정합성 맞춤
-- 변경 파일: `mobile-app/lib/main.dart`, `mobile-app/lib/screens/settings_page.dart`, `mobile-app/lib/services/app_settings.dart`, `mobile-app/lib/services/app_i18n.dart`, `mobile-app/lib/widgets/*.dart`, `mobile-app/test/*.dart`, `mobile-app/pubspec.yaml`, `mobile-app/pubspec.lock`
-- 검증:
-  - `flutter analyze` (mobile-app): 통과(문법/타입 오류 없음, 100+ 기존/정보성 경고 존재)
-  - `flutter test` (mobile-app): 통과
+- 일시: 2026-09-27 (구현 완료) / 브랜치: `feature/relay-traffic-longpoll` (develop에서 분기)
+- 목적: 릴레이 서버 트래픽 절감 — (1) /api/poll 옵트인 롱폴, (2) PC 세션 대기 connect 지수 백오프, (4) 중복 PC heartbeat 제거 (유휴 세션 요청 ~6,700/h → ~290/h 목표)
+- 커밋: `a47b3cf` 서버 롱폴(wait 상한 25s, clientGone 감시) · `48d7fa8`+`fdbd483` 익스텐션(롱폴+백오프·heartbeat 제거) · `e231cab` 모바일(롱폴+커맨드메타 6초 타이머) · `657d48c` 스모크 스크립트 · `2e6a01a` 기록
+- 검증(실실행): `npm run type-check` / `npm run build:extension` EXIT=0, `flutter analyze` 117건(기존 동일·신규 0), `flutter test` 42통과, `streaming_text_merge_test` 6통과. diff는 계획 스니펫과 일치 확인
+- 다음 단계(배포 — 사용자 승인 필요): ① `cd codex-relay-server && vercel --prod` ② `node test-relay-longpoll.js https://codex-relay.jaloveeye.com` (A/B 통과) + `node test-relay-full.js <RELAY_URL>` 회귀 ③ 클라이언트 배포는 순서 무관(옵트인)
 - 남은 리스크:
-  - 다수의 `withOpacity`, `deprecated` 경고 및 기존 코드 정리가 미적용(기능 동작에는 영향 없음).
-  - `AppI18n` 추가로 텍스트 키 누락/문구 품질 변경 시 테스트 문자열 동기화가 다시 필요.
+  - 구버전 서버에서는 `wait` 무시 → 즉시응답 동작(기능 저하 없음). 배포 전 스모크 A/B 실패는 정상.
+  - opt 5~7(승인 piggyback, 백그라운드 폴링, 메시지 이중저장·trace 중복) 별도 과제로 미적용.

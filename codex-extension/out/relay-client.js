@@ -68,9 +68,16 @@ class RelayClient {
         this.POLL_LOOP_TICK = 100; // 내부 스케줄러 tick
         this.POLL_ACTIVITY_WINDOW_MS = 60000; // 최근 활동 60초는 활성 폴링 유지
         this.POLL_HEARTBEAT_INTERVAL = 30000; // 30초마다 폴링 동작 로그
-        /** 연결 유지용 heartbeat (2분 무heartbeat 시 서버가 연결 끊김으로 간주) */
-        this.heartbeatInterval = null;
-        this.HEARTBEAT_INTERVAL_MS = 30 * 1000; // 30초마다 heartbeat
+        /** 롱폴: 서버가 새 메시지가 생길 때까지(최대 25초) 응답을 유지한다 */
+        this.POLL_WAIT_SECONDS = 25;
+        /** 롱폴 요청 타임아웃 (서버 wait + 마진) */
+        this.POLL_HTTP_TIMEOUT_MS = 35000;
+        /** poll 실패 시 백오프 (1s → 15s cap, 성공 시 리셋) */
+        this.nextPollAllowedAtMs = 0;
+        this.pollErrorBackoffMs = 1000;
+        /** 세션 대기 중 connect 재시도 백오프 (1s → 30s cap) */
+        this.nextConnectAttemptAtMs = 0;
+        this.connectRetryBackoffMs = 1000;
         /** 릴레이로 보내는 메시지 순서 보장용 직렬화 큐 */
         this.sendQueue = Promise.resolve();
         /** 서버 disconnect 중복 호출 방지 */
@@ -147,7 +154,6 @@ class RelayClient {
         }
         if (this.sessionId && this.isConnected) {
             this.log(`🔌 기존 세션 ${this.sessionId} 연결 해제 후 ${trimmed}로 연결`);
-            this.clearHeartbeat();
             this.sessionId = null;
             this.isConnected = false;
         }
@@ -173,6 +179,8 @@ class RelayClient {
         this.targetPin =
             pin != null && typeof pin === "string" && pin.trim() ? pin.trim() : null;
         this.pcInUse = false;
+        this.nextConnectAttemptAtMs = 0;
+        this.connectRetryBackoffMs = 1000;
         this.isRunning = true;
         this.runToken += 1;
         this.log("Starting relay client...");
@@ -188,7 +196,6 @@ class RelayClient {
     stop() {
         this.isRunning = false;
         this.runToken += 1;
-        this.clearHeartbeat();
         if (this.pollInterval) {
             clearInterval(this.pollInterval);
             this.pollInterval = null;
@@ -201,31 +208,6 @@ class RelayClient {
         this.targetPin = null;
         this.pcInUse = false;
         this.log("Relay client stopped");
-    }
-    clearHeartbeat() {
-        if (this.heartbeatInterval) {
-            clearInterval(this.heartbeatInterval);
-            this.heartbeatInterval = null;
-        }
-    }
-    /** 서버에 "살아있음" 신호 전송 (2분간 없으면 연결 끊김으로 간주 → 같은 세션 ID 재사용 가능) */
-    async sendHeartbeat() {
-        if (!this.sessionId || !this.isConnected)
-            return;
-        const url = `${this.relayServerUrl}/api/heartbeat?sessionId=${encodeURIComponent(this.sessionId)}&deviceId=${encodeURIComponent(this.deviceId)}`;
-        try {
-            await this.httpRequest(url);
-        }
-        catch {
-            // 로그만 하고 유지 (다음 heartbeat에서 재시도)
-        }
-    }
-    startHeartbeat() {
-        this.clearHeartbeat();
-        this.heartbeatInterval = setInterval(() => {
-            this.sendHeartbeat();
-        }, this.HEARTBEAT_INTERVAL_MS);
-        this.log(`💓 Heartbeat 시작 (${this.HEARTBEAT_INTERVAL_MS / 1000}초마다, 2분 무응답 시 연결 해제로 간주)`);
     }
     /**
      * Start polling for messages and session discovery
@@ -243,6 +225,8 @@ class RelayClient {
             const interval = this.getCurrentPollIntervalMs(now);
             if (now - this.lastPollAt < interval)
                 return;
+            if (now < this.nextPollAllowedAtMs)
+                return;
             if (this.pollInFlight)
                 return;
             this.lastPollAt = now;
@@ -255,7 +239,7 @@ class RelayClient {
                 this.pollInFlight = false;
             });
         }, this.POLL_LOOP_TICK);
-        this.log("⏱️ Adaptive poll interval started (idle 1s / active 0.25s)");
+        this.log("⏱️ Long-poll loop started (wait 25s, immediate on message)");
     }
     getCurrentPollIntervalMs(now = Date.now()) {
         const isActive = now - this.lastRelayActivityAt <= this.POLL_ACTIVITY_WINDOW_MS;
@@ -273,12 +257,22 @@ class RelayClient {
                 return;
             if (this.targetSessionId) {
                 const now = Date.now();
-                if (now - this.lastNoSessionHeartbeatTime >=
-                    this.POLL_HEARTBEAT_INTERVAL) {
+                if (now < this.nextConnectAttemptAtMs)
+                    return;
+                if (now - this.lastNoSessionHeartbeatTime >= this.POLL_HEARTBEAT_INTERVAL) {
                     this.lastNoSessionHeartbeatTime = now;
-                    this.log(`⏳ 세션 ${this.targetSessionId} 대기 중 (모바일에서 해당 세션 생성·연결 후 자동 연결)`);
+                    const waitSecs = Math.max(0, Math.round((this.nextConnectAttemptAtMs - now) / 1000));
+                    this.log(`⏳ 세션 ${this.targetSessionId} 대기 중 (모바일에서 해당 세션 생성·연결 후 자동 연결${waitSecs > 0 ? `, 다음 시도까지 ${waitSecs}s` : ""})`);
                 }
                 await this.connectToSession(this.targetSessionId, this.targetPin ?? undefined);
+                if (this.sessionId) {
+                    this.nextConnectAttemptAtMs = 0;
+                    this.connectRetryBackoffMs = 1000;
+                }
+                else {
+                    this.nextConnectAttemptAtMs = Date.now() + this.connectRetryBackoffMs;
+                    this.connectRetryBackoffMs = Math.min(this.connectRetryBackoffMs * 2, 30000);
+                }
                 return;
             }
             // targetSessionId 없을 때만 discovery (하위 호환)
@@ -307,12 +301,17 @@ class RelayClient {
                 this.lastPollHeartbeatTime = now;
                 this.log(`🔄 Polling sessionId=${this.sessionId} (정상 폴링 중)`);
             }
-            const pollUrl = `${this.relayServerUrl}/api/poll?sessionId=${this.sessionId}&deviceType=pc&deviceId=${encodeURIComponent(this.deviceId)}`;
-            const data = await this.httpRequest(pollUrl);
+            const pollUrl = `${this.relayServerUrl}/api/poll?sessionId=${this.sessionId}&deviceType=pc&deviceId=${encodeURIComponent(this.deviceId)}&wait=${this.POLL_WAIT_SECONDS}`;
+            const data = await this.httpRequest(pollUrl, "GET", undefined, this.POLL_HTTP_TIMEOUT_MS);
             if (!data) {
-                this.logError("⚠️ Poll returned null/undefined data");
+                // 요청 실패/타임아웃: 즉시 재시도 폭탄 방지
+                this.nextPollAllowedAtMs = Date.now() + this.pollErrorBackoffMs;
+                this.pollErrorBackoffMs = Math.min(this.pollErrorBackoffMs * 2, 15000);
+                this.logError("⚠️ Poll failed - backing off before retry");
                 return;
             }
+            this.nextPollAllowedAtMs = 0;
+            this.pollErrorBackoffMs = 1000;
             // 응답 형식 허용: data.data.messages 또는 data.messages
             const messages = Array.isArray(data.data?.messages)
                 ? data.data.messages
@@ -498,7 +497,8 @@ class RelayClient {
                     result.body?.success) {
                     this.sessionId = sid;
                     this.isConnected = true;
-                    this.startHeartbeat();
+                    // heartbeat 제거: /api/poll(RPC relay_poll_messages)이 접속마다
+                    // pc_last_seen_at을 갱신하므로 별도 heartbeat가 불필요하다.
                     this.log(`✅ 익스텐션은 릴레이 서버를 통해 세션 ${this.sessionId}에 접속했습니다.`);
                     this.log(`💡 모바일에서 세션 ID ${this.sessionId}로 연결하세요.`);
                     if (this.onSessionConnectedCallback) {
@@ -678,7 +678,6 @@ class RelayClient {
                     this.sessionId = currentSessionId;
                     this.isConnected = true;
                     this.pcInUse = false;
-                    this.startHeartbeat();
                     this.log(`🧹 세션 ${currentSessionId} 정리 완료 (모바일 ${clearedCount}개 정리, PC 연결 유지)`);
                 }
                 else {
@@ -783,7 +782,7 @@ class RelayClient {
     /**
      * HTTP request helper (using Node.js http/https modules)
      */
-    async httpRequest(url, method = "GET", body) {
+    async httpRequest(url, method = "GET", body, timeoutMs) {
         return new Promise((resolve, reject) => {
             const urlObj = new url_1.URL(url);
             const isHttps = urlObj.protocol === "https:";
@@ -825,6 +824,11 @@ class RelayClient {
             });
             if (body && method === "POST") {
                 req.write(JSON.stringify(body));
+            }
+            if (timeoutMs && timeoutMs > 0) {
+                req.setTimeout(timeoutMs, () => {
+                    req.destroy(new Error(`Request timed out after ${timeoutMs}ms`));
+                });
             }
             req.end();
         });

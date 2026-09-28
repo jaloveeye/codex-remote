@@ -197,7 +197,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // 세션에 디바이스 연결
     let session: Session | null = null;
     try {
-      session = await joinSession(effectiveSessionId, deviceId, deviceType);
+      session = await joinSession(
+        effectiveSessionId,
+        deviceId,
+        deviceType,
+        existingSession
+      );
     } catch (e) {
       console.error("joinSession error:", e);
       return res.status(500).json({

@@ -19,6 +19,7 @@ import {
   appendTraceHopBestEffort,
   resolveTraceIdentity,
 } from "../lib/trace-ingest.js";
+import { scheduleBackground } from "../lib/background-work.js";
 
 interface SendRequest {
   sessionId?: string;
@@ -269,20 +270,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       data && typeof data === "object" ? (data as Record<string, unknown>) : null
     );
 
-    await appendTraceHopBestEffort({
-      sessionId,
-      hop:
-        deviceType === "mobile"
-          ? "relay.recv.from_mobile"
-          : "relay.recv.from_pc",
-      traceId: traceIdentity.traceId,
-      commandId: traceIdentity.commandId,
-      senderDeviceId: deviceId,
-      targetDeviceId: targetDeviceId ?? null,
-      meta: {
-        messageType: type,
-      },
-    });
+    scheduleBackground(() =>
+      appendTraceHopBestEffort({
+        sessionId,
+        hop:
+          deviceType === "mobile"
+            ? "relay.recv.from_mobile"
+            : "relay.recv.from_pc",
+        traceId: traceIdentity.traceId,
+        commandId: traceIdentity.commandId,
+        senderDeviceId: deviceId,
+        targetDeviceId: targetDeviceId ?? null,
+        meta: {
+          messageType: type,
+        },
+      })
+    );
 
     // 실행 결과(command_result)를 approval 흐름과 연결
     if (deviceType === "pc" && type === "command_result") {
@@ -449,23 +452,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     };
 
     // 메시지 큐에 추가
-    await sendMessage(sessionId, message);
-    await appendTraceHopBestEffort({
-      sessionId,
-      hop:
-        targetType === "pc"
-          ? "relay.enqueue.to_pc"
-          : "relay.enqueue.to_mobile",
-      traceId: traceIdentity.traceId,
-      commandId: traceIdentity.commandId,
-      relayMessageId: message.id,
-      senderDeviceId: deviceId,
-      targetDeviceId: targetDeviceId ?? null,
-      meta: {
-        messageType: type,
-        targetType,
-      },
-    });
+    await sendMessage(sessionId, message, session.mobileDeviceIds ?? []);
+    scheduleBackground(() =>
+      appendTraceHopBestEffort({
+        sessionId,
+        hop:
+          targetType === "pc"
+            ? "relay.enqueue.to_pc"
+            : "relay.enqueue.to_mobile",
+        traceId: traceIdentity.traceId,
+        commandId: traceIdentity.commandId,
+        relayMessageId: message.id,
+        senderDeviceId: deviceId,
+        targetDeviceId: targetDeviceId ?? null,
+        meta: {
+          messageType: type,
+          targetType,
+        },
+      })
+    );
 
     const response: ApiResponse<{
       messageId: string;
