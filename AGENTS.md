@@ -48,17 +48,11 @@
 - 유지보수: `skills/fm_09_hygiene-maint.md`
 
 ## 최근 작업 기록 (요약)
-- 일시: 2026-09-27
-- 브랜치: `feature/relay-traffic-longpoll` (develop에서 분기)
+- 일시: 2026-09-27 (구현 완료) / 브랜치: `feature/relay-traffic-longpoll` (develop에서 분기)
 - 목적: 릴레이 서버 트래픽 절감 — (1) /api/poll 옵트인 롱폴, (2) PC 세션 대기 connect 지수 백오프, (4) 중복 PC heartbeat 제거 (유휴 세션 요청 ~6,700/h → ~290/h 목표)
-- 완료/변경 파일:
-  - 계획 문서: `docs/superpowers/plans/2026-09-27-relay-traffic-optimization.md` (재개 가이드 포함)
-  - `codex-relay-server/api/poll.ts` — 롱폴 wait 파라미터(기본 0, 상한 25초, 1초 간격 재확인, clientGone close 감시) 커밋 `a47b3cf`
-- 검증:
-  - `cd codex-relay-server && npm run type-check` 통과
-  - diff 검증 완료 (계획 스니펫과 일치)
-- 미완료(다음 세션): Task 2 익스텐션(`relay-client.ts` 롱폴+백오프+heartbeat 제거, **151행 clearHeartbeat 삭제 필수**), Task 3 모바일(`main.dart` 롱폴+6초 커맨드메타 타이머), Task 4 `test-relay-longpoll.js` 스모크, 게이트(`build:extension`, `flutter analyze/test`, streaming merge 테스트)
+- 커밋: `a47b3cf` 서버 롱폴(wait 상한 25s, clientGone 감시) · `48d7fa8`+`fdbd483` 익스텐션(롱폴+백오프·heartbeat 제거) · `e231cab` 모바일(롱폴+커맨드메타 6초 타이머) · `657d48c` 스모크 스크립트 · `2e6a01a` 기록
+- 검증(실실행): `npm run type-check` / `npm run build:extension` EXIT=0, `flutter analyze` 117건(기존 동일·신규 0), `flutter test` 42통과, `streaming_text_merge_test` 6통과. diff는 계획 스니펫과 일치 확인
+- 다음 단계(배포 — 사용자 승인 필요): ① `cd codex-relay-server && vercel --prod` ② `node test-relay-longpoll.js https://codex-relay.jaloveeye.com` (A/B 통과) + `node test-relay-full.js <RELAY_URL>` 회귀 ③ 클라이언트 배포는 순서 무관(옵트인)
 - 남은 리스크:
-  - 서버 리배포 전까지 `wait`는 무시됨(구버전 서버) → 즉시응답 동작(기능 저하 없음). 리버티스: 배포는 사용자 승인 필요.
-  - 클라이언트 전환(익스텐션/앱 배포)은 서버 리배포 이후 권장(옵트인 설계로 순서 자유).
+  - 구버전 서버에서는 `wait` 무시 → 즉시응답 동작(기능 저하 없음). 배포 전 스모크 A/B 실패는 정상.
   - opt 5~7(승인 piggyback, 백그라운드 폴링, 메시지 이중저장·trace 중복) 별도 과제로 미적용.

@@ -2,20 +2,20 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-## 📌 진행 상태 (2026-09-27 세션 일시중단 시점 — 다음 세션은 여기서 재개)
+## 📌 진행 상태 (2026-09-27 구현 완료 — 배포 대기)
 
 | 항목 | 상태 |
 |---|---|
-| 브랜치 | `feature/relay-traffic-longpoll` (develop에서 분기됨) ✅ |
-| Task 1 서버 롱폴 | **완료** — 커밋 `a47b3cf`, `npm run type-check` 통과, diff 검증 완료 |
-| Task 2 익스텐션 | **미착수 — 다음에 할 일.** Chunk 2 그대로 실행: 롱폴(wait=25)+poll 에러 백오프(1s→15s cap)+connect 백오프(1s→30s cap)+heartbeat 제거. **주의: 151행 `clearHeartbeat()`도 삭제 필수(누락 시 빌드 실패).** 대기 로그의 백오프 초 표기는 "다음 시도까지 Ns"로 `nextConnectAttemptAtMs > now`일 때만 출력(초기 음수 방지) |
-| Task 3 모바일 | 미착수 — Chunk 3 실행. `dart:math` 미임포트 → 산술 cap 스니펫 그대로 사용 |
-| Task 4 스모크 스크립트 | 미착수 — Chunk 4 (배포 후에만 유효, pre-deploy는 Test C 경고 처리) |
-| 미실행 게이트 | `npm run build:extension`, `cd mobile-app && flutter analyze && flutter test`, `flutter test test/services/streaming_text_merge_test.dart` |
-| 배포 관련 | **서버 리배포 전까지는 `wait` 파라미터가 무시됨(구버전 서버) → 즉시응답으로 동작, 기능 저하 없음.** 배포는 사용자 승인 필요 (`cd codex-relay-server && vercel --prod`) |
-| 계획 리뷰 | 완료 — 리뷰어 지적 2건(clearHeartbeat 151행 누락, dart:math 미임포트) 모두 본 문서 스니펫에 반영 완료 |
+| 브랜치 | `feature/relay-traffic-longpoll` (develop에서 분기) ✅ |
+| Task 1 서버 롱폴 | **완료** — 커밋 `a47b3cf` |
+| Task 2 익스텐션 | **완료** — 커밋 `48d7fa8` (소스) + `fdbd483` (out 산물). 롱폴 wait=25+35s 타임아웃, poll 에러 백오프 1s→15s, connect 백오프 1s→30s, heartbeat 완전 제거(4개 호출부 포함 151행) |
+| Task 3 모바일 | **완료** — 커밋 `e231cab`. 롱폴 wait=25+35s 타임아웃, 에러 백오프(산술 cap), 커맨드메타 6초 타이머 분리, `_stopPolling` 정리 |
+| Task 4 스모크 스크립트 | **완료** — 커밋 `657d48c` (`test-relay-longpoll.js`: A 즉시수신/B 즉시수신/C hold, C는 서버 미배포 시 경고 후 통과) |
+| 게이트 (모두 실실행 검증) | `npm run type-check` EXIT=0 ✅ / `npm run build:extension` EXIT=0 ✅ / `flutter analyze` 117건(기존과 동일, 신규 0) ✅ / `flutter test` 42 통과 ✅ / `streaming_text_merge_test` 6 통과 ✅ |
+| **남은 일: 배포** | ① 서버 리배포 (사용자 승인 필요): `cd codex-relay-server && vercel --prod` → ② `node test-relay-longpoll.js https://codex-relay.jaloveeye.com` (A/B 통과 확인) + `node test-relay-full.js <RELAY_URL>` 회귀 → ③ 익스텐션/앱 배포는 이후 자유 (옵트인 설계, 순서 무관) |
+| 참고 | 구버전 서버에 신버전 클라이언트: `wait` 무시 → 즉시응답 동작(기존과 동일, 기능 저하 없음). 배포 전 스모크는 A/B 실패가 정상(wait 미지원), C만 경고 통과 |
 
-**재개 절차:** 이 문서의 Chunk 2 → Task 2 서브에이전트 실행 → 게이트(`npm run build:extension`) → Chunk 3 → 게이트(flutter) → Chunk 4 → 전체 회귀(`node test-relay-full.js <RELAY_URL>`).
+**재개 절차:** 배포 승인 → 서버 `vercel --prod` → 스모크(A/B·회귀) → (선택) 클라이언트 배포. 병행 과제: opt 5~7(승인 piggyback, 백그라운드 폴링, 이중저장/트레이스 절감)은 별도 과제로 미적용.
 
 ---
 
