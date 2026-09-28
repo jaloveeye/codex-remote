@@ -39,7 +39,7 @@ async function postJson(path, body) {
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   const bodyJson = await response.json().catch(() => null);
-  return { statusCode: response.statusCode, body: bodyJson };
+  return { statusCode: response.status, body: bodyJson };
 }
 
 /** 롱폴 1회. 결과로 messages 배열을 반환 (실패 시 null) */
@@ -52,8 +52,8 @@ async function longPollOnce(sessionId, deviceType, deviceId, waitSeconds) {
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   const body = await response.json().catch(() => null);
-  if (response.statusCode !== 200 || body?.success !== true) {
-    console.error(`  poll 응답 이상: HTTP ${response.statusCode}`, body);
+  if (response.status !== 200 || body?.success !== true) {
+    console.error(`  poll 응답 이상: HTTP ${response.status}`, body);
     return null;
   }
   return Array.isArray(body?.data?.messages) ? body.data.messages : [];
