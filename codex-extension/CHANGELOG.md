@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2
+
+- Switch relay polling to opt-in long-poll (server holds the request up to 25s) to cut idle relay traffic.
+- Add exponential backoff (1s → 30s cap) for relay connect retries while waiting for a mobile session to appear.
+- Remove the redundant 30s relay heartbeat; polling already refreshes PC presence on the relay.
+- Add request timeouts and failure backoff around relay polling for network resilience.
+
 ## 0.2.1
 
 - Coalesce concurrent Codex runtime capability requests with a short-lived cache.
