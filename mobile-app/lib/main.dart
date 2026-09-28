@@ -852,6 +852,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   int _lastRelayPollStartedAtMs = 0;
   int _traceIdSequence = 0;
   static const Duration _pollSchedulerTick = Duration(milliseconds: 250);
+  static const int _relayLongPollWaitSeconds = 25;
+  static const Duration _relayLongPollHttpTimeout = Duration(seconds: 35);
+  int _relayPollErrorBackoffMs = 1000;
+  static const int _relayPollMaxErrorBackoffMs = 15000;
+  Timer? _commandMetaTimer;
 
   // 스트리밍 관련
   int? _streamingMessageIndex; // 현재 스트리밍 중인 메시지의 인덱스
@@ -2112,6 +2117,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _lastRelayPollStartedAtMs = now;
       await _pollRelayMessagesOnce();
     });
+
+    _commandMetaTimer?.cancel();
+    _commandMetaTimer = Timer.periodic(const Duration(seconds: 6), (_) {
+      unawaited(_refreshCommandMetaIfStale());
+    });
   }
 
   Future<void> _pollRelayMessagesOnce() async {
@@ -2120,15 +2130,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     _isRelayPollInFlight = true;
     try {
-      final response = await http.get(
-        _relayUri('/api/poll', {
-          'sessionId': _sessionId!,
-          'deviceType': 'mobile',
-          'deviceId': _deviceId,
-        }),
-      );
+      final response = await http
+          .get(
+            _relayUri('/api/poll', {
+              'sessionId': _sessionId!,
+              'deviceType': 'mobile',
+              'deviceId': _deviceId,
+              'wait': '$_relayLongPollWaitSeconds',
+            }),
+          )
+          .timeout(_relayLongPollHttpTimeout);
 
       if (response.statusCode == 200) {
+        _relayPollErrorBackoffMs = 1000;
         final data = jsonDecode(response.body);
         if (data['success'] == true && data['data']['messages'] != null) {
           final messages = data['data']['messages'] as List;
@@ -2167,7 +2181,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         unawaited(_refreshCommandMetaIfStale());
       }
     } catch (e) {
-      // 폴링 에러는 조용히 무시 (일시적인 네트워크 문제일 수 있음)
+      // 폴링 에러는 조용히 무시하되, 즉시 재시도 폭탄은 막는다
+      _lastRelayPollStartedAtMs =
+          DateTime.now().millisecondsSinceEpoch + _relayPollErrorBackoffMs;
+      final doubled = _relayPollErrorBackoffMs * 2;
+      _relayPollErrorBackoffMs =
+          doubled > _relayPollMaxErrorBackoffMs ? _relayPollMaxErrorBackoffMs : doubled;
     } finally {
       _isRelayPollInFlight = false;
     }
@@ -2176,6 +2195,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void _stopPolling() {
     _pollTimer?.cancel();
     _pollTimer = null;
+    _commandMetaTimer?.cancel();
+    _commandMetaTimer = null;
     _isRelayPollInFlight = false;
     _lastRelayPollStartedAtMs = 0;
   }
