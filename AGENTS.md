@@ -52,7 +52,8 @@
 - 목적: 릴레이 서버 트래픽 절감 — (1) /api/poll 옵트인 롱폴, (2) PC 세션 대기 connect 지수 백오프, (4) 중복 PC heartbeat 제거 (유휴 세션 요청 ~6,700/h → ~290/h 목표)
 - 커밋: `a47b3cf` 서버 롱폴(wait 상한 25s, clientGone 감시) · `48d7fa8`+`fdbd483` 익스텐션(롱폴+백오프·heartbeat 제거) · `e231cab` 모바일(롱폴+커맨드메타 6초 타이머) · `657d48c` 스모크 스크립트 · `2e6a01a` 기록
 - 검증(실실행): `npm run type-check` / `npm run build:extension` EXIT=0, `flutter analyze` 117건(기존 동일·신규 0), `flutter test` 42통과, `streaming_text_merge_test` 6통과. diff는 계획 스니펫과 일치 확인
-- 다음 단계(배포 — 사용자 승인 필요): ① `cd codex-relay-server && vercel --prod` ② `node test-relay-longpoll.js https://codex-relay.jaloveeye.com` (A/B 통과) + `node test-relay-full.js <RELAY_URL>` 회귀 ③ 클라이언트 배포는 순서 무관(옵트인)
+- 다음 단계(배포 — 사용자 승인 필요): ① `cd codex-relay-server && npm run deploy` (vercel CLI 직접 배포 — git master 푸시·동기화 완료 `70a370d`, CLI 토큰 만료로 에이전트 실행 불가) ② `node test-relay-longpoll.js https://codex-relay.jaloveeye.com` (A/B 통과) + `node test-relay-full.js <RELAY_URL>` 회귀 ③ 클라이언트 배포는 순서 무관(옵트인)
+- 릴리스 준비 완료(2026-09-28): 익스텐션 0.2.2(`d906d3f`, VSIX: `codex-extension/codex-remote-extension-0.2.2.vsix`, 내부 버전 확인), 모바일 0.2.2+10(`69b7d86`) — Android `build/app/outputs/bundle/release/app-release.aab`(45.4MB)+`flutter-apk/app-release.apk`(55.9MB, versionCode 10/0.2.2), iOS `build/ios/ipa/codex_remote.ipa`(22.8MB, 0.2.2/10). 스모크 스크립트 status 필드 수정 커밋 `8fa5a40`
 - 남은 리스크:
   - 구버전 서버에서는 `wait` 무시 → 즉시응답 동작(기능 저하 없음). 배포 전 스모크 A/B 실패는 정상.
   - opt 5~7(승인 piggyback, 백그라운드 폴링, 메시지 이중저장·trace 중복) 별도 과제로 미적용.
