@@ -30,3 +30,4 @@ yarn-error.log*
 
 # Packaged extension artifacts
 *.vsix
+.vercel
